@@ -174,7 +174,7 @@ class TranslateController {
             $skipIfSame = $config['TranslateSkipIfSame'];
             $maxChars = (int)$config['TokenMaxChars'];
 
-            $blocks = TextUtil::extractBlocks($content);
+            $blocks = TextUtil::extractRichBlocks($content);
             if (empty($blocks)) {
                 Logger::debug("Feed $feedId: no text block extracted from content");
                 return '';
@@ -187,11 +187,11 @@ class TranslateController {
             $pending = [];       // "blockIndex:chunkIndex" => 原文
             foreach ($blocks as $blockIndex => $block) {
                 // 已是目标语言则原样保留
-                if ($skipIfSame && $this->isTargetLang($block, $targetLang)) {
+                if ($skipIfSame && $this->isTargetLang($block['text'], $targetLang)) {
                     $blockChunks[$blockIndex] = null;
                     continue;
                 }
-                $chunks = TextUtil::splitChunks($block, $maxChars);
+                $chunks = TextUtil::splitChunksBalanced($block['text'], $maxChars);
                 if (empty($chunks)) {
                     $blockChunks[$blockIndex] = [];
                     continue;
@@ -230,7 +230,7 @@ class TranslateController {
                 }
                 $translatedBlock = trim(implode(' ', $parts));
                 if ($translatedBlock !== '') {
-                    $translatedBlocks[] = $translatedBlock;
+                    $translatedBlocks[] = ['text' => $translatedBlock, 'tags' => $block['tags']];
                     $translatedCount++;
                 }
             }
@@ -242,10 +242,11 @@ class TranslateController {
 
             $paragraphs = '';
             foreach ($translatedBlocks as $block) {
-                $paragraphs .= '<p style="margin:0 0 0.6em;">' . TextUtil::escapeHtml($block) . '</p>';
+                // 还原行内标签（链接、粗体、代码等），其余文本会被转义
+                $paragraphs .= '<p style="margin:0 0 0.6em;">' . TextUtil::restoreInlineTags($block['text'], $block['tags']) . '</p>';
             }
 
-            Logger::debug('Added content translation: ' . mb_substr(implode(' ', $translatedBlocks), 0, 40));
+            Logger::debug('Added content translation: ' . mb_substr(implode(' ', array_column($translatedBlocks, 'text')), 0, 40));
             return '<div style="margin:0 0 1em;padding:0.8em 1em;border-left:4px solid #2b7de9;'
                 . 'background:#f2f7ff;border-radius:3px;color:#1a3d6d;">'
                 . '<p style="margin:0 0 0.6em;"><em>🌐 译文（' . strtoupper($targetLang) . '）：</em></p>'

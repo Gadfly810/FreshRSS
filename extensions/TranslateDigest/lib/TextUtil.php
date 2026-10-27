@@ -54,12 +54,18 @@ class TextUtil {
     }
 
     /**
-     * 从 HTML 中提取段落级文本块
-     * 块级标签与 <br> 当作换行，去标签、解实体、规范化空白，丢弃空行与相邻重复行
-     * @param string $html 原始 HTML
-     * @return array 文本块列表
+     * 需要保留的行内标签（其余标签直接丢弃）
      */
-    public static function extractBlocks($html) {
+    private static $inlineTags = ['a', 'b', 'strong', 'i', 'em', 'u', 's', 'del', 'ins', 'code', 'kbd', 'var', 'sub', 'sup', 'mark', 'small', 'q', 'cite', 'abbr', 'time'];
+
+    /**
+     * 从 HTML 中提取段落级文本块，并保留行内标签
+     * 行内标签被换成 <a1>…</a1> 形式的占位符，翻译后再用 restoreInlineTags() 还原，
+     * 这样译文仍能保留链接、粗体、代码等格式
+     * @param string $html 原始 HTML
+     * @return array 每项为 ['text' => 含占位符的文本, 'tags' => [id => ['open' => .., 'close' => ..]]]
+     */
+    public static function extractRichBlocks($html) {
         $html = (string)$html;
 
         // 去掉脚本与样式内容
@@ -69,25 +75,123 @@ class TextUtil {
         $html = preg_replace('#<br\s*/?>#i', "\n", $html);
         $html = preg_replace('#</(p|div|li|ul|ol|dl|dt|dd|h[1-6]|blockquote|tr|td|th|section|article|figure|figcaption|pre|table)\s*>#i', "\n", $html);
         $html = preg_replace('#<(p|div|li|ul|ol|dl|dt|dd|h[1-6]|blockquote|tr|td|th|section|article|figure|figcaption|pre|table)\b[^>]*>#i', "\n", $html);
-
-        $text = strip_tags($html);
-        $text = html_entity_decode($text, ENT_QUOTES | ENT_HTML5, 'UTF-8');
-        $text = str_replace(["\r\n", "\r"], "\n", $text);
+        $html = str_replace(["\r\n", "\r"], "\n", $html);
 
         $blocks = [];
-        foreach (explode("\n", $text) as $line) {
-            $line = preg_replace('/\s+/u', ' ', $line);
-            $line = trim($line);
-            if ($line === '' || mb_strlen($line) < 2) {
+        $previousText = null;
+        foreach (explode("\n", $html) as $line) {
+            $block = self::protectInlineTags($line);
+            $block['text'] = preg_replace('/\s+/u', ' ', $block['text']);
+            $block['text'] = trim($block['text']);
+            if ($block['text'] === '' || mb_strlen($block['text']) < 2) {
                 continue;
             }
-            if (!empty($blocks) && end($blocks) === $line) {
+            if ($previousText !== null && $previousText === $block['text']) {
                 continue;
             }
-            $blocks[] = $line;
+            $previousText = $block['text'];
+            $blocks[] = $block;
         }
 
         return $blocks;
+    }
+
+    /**
+     * 把一段 HTML 中的行内标签换成占位符，返回纯文本与标签映射
+     * @param string $html 单块 HTML
+     * @return array ['text' => string, 'tags' => array]
+     */
+    private static function protectInlineTags($html) {
+        $tags = [];
+        $nextId = 0;
+
+        $text = preg_replace_callback(
+            '#<(/?)([a-zA-Z][a-zA-Z0-9]*)((?:\s[^>]*)?)\s*/?>#',
+            function ($match) use (&$tags, &$nextId) {
+                $isClosing = $match[1] === '/';
+                $name = strtolower($match[2]);
+                if (!in_array($name, self::$inlineTags, true)) {
+                    return '';
+                }
+
+                if ($isClosing) {
+                    // 找最近的同名未闭合标签
+                    for ($id = $nextId; $id >= 1; $id--) {
+                        if (isset($tags[$id]) && $tags[$id]['name'] === $name && !$tags[$id]['closed']) {
+                            $tags[$id]['closed'] = true;
+                            return '</a' . $id . '>';
+                        }
+                    }
+                    return '';
+                }
+
+                $nextId++;
+                $tags[$nextId] = [
+                    'name' => $name,
+                    'open' => $match[0],
+                    'close' => '</' . $name . '>',
+                    'closed' => false,
+                ];
+                return '<a' . $nextId . '>';
+            },
+            (string)$html
+        );
+
+        // 未闭合的标签也补上关闭标签，保证还原时成对
+        foreach ($tags as $id => $tag) {
+            if (!$tag['closed']) {
+                $text .= '</a' . $id . '>';
+                $tags[$id]['closed'] = true;
+            }
+        }
+
+        $text = html_entity_decode($text, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+
+        return ['text' => $text, 'tags' => $tags];
+    }
+
+    /**
+     * 把译文中的占位符还原成真实 HTML 标签
+     * 译文其余部分会被转义；占位符缺失或不成对时丢弃该标签，避免产生残缺 HTML
+     * @param string $text 译文（含 <a1> 占位符）
+     * @param array $tags extractRichBlocks() 返回的标签映射
+     * @return string 可插入页面的 HTML
+     */
+    public static function restoreInlineTags($text, array $tags) {
+        $escaped = self::escapeHtml((string)$text);
+        if (empty($tags)) {
+            return $escaped;
+        }
+
+        // 先把占位符换成临时标记，便于统计开闭是否成对
+        $pairs = [];
+        foreach ($tags as $id => $tag) {
+            $openToken = "\x01O{$id}\x02";
+            $closeToken = "\x01C{$id}\x02";
+            $escaped = str_replace(
+                ['&lt;a' . $id . '&gt;', '&lt;/a' . $id . '&gt;'],
+                [$openToken, $closeToken],
+                $escaped
+            );
+            $pairs[$id] = ['open' => $openToken, 'close' => $closeToken, 'tag' => $tag];
+        }
+
+        foreach ($pairs as $id => $pair) {
+            $openCount = substr_count($escaped, $pair['open']);
+            $closeCount = substr_count($escaped, $pair['close']);
+            if ($openCount === 0 && $closeCount === 0) {
+                continue;
+            }
+            if ($openCount !== $closeCount || $openCount > 1) {
+                // 不成对或重复：丢弃该标签，只留文字
+                $escaped = str_replace([$pair['open'], $pair['close']], '', $escaped);
+                continue;
+            }
+            $escaped = str_replace([$pair['open'], $pair['close']], [$pair['tag']['open'], $pair['tag']['close']], $escaped);
+        }
+
+        // 清掉模型遗留的占位符残骸
+        return preg_replace('/&lt;\/?a\d+&gt;/', '', $escaped);
     }
 
     /**
@@ -148,6 +252,49 @@ class TextUtil {
             }
         }
         return $result;
+    }
+
+    /**
+     * 在 splitChunks() 基础上保证每个块内的占位符成对，避免标签被切到两个块
+     * @param string $text 含占位符的文本
+     * @param int $limit 单块最大字符数
+     * @return array 文本块列表
+     */
+    public static function splitChunksBalanced($text, $limit) {
+        $chunks = self::splitChunks($text, $limit);
+        if (count($chunks) <= 1) {
+            return $chunks;
+        }
+
+        $balanced = [];
+        $buffer = '';
+        foreach ($chunks as $chunk) {
+            $buffer = $buffer === '' ? $chunk : $buffer . ' ' . $chunk;
+            if (self::hasBalancedPlaceholders($buffer)) {
+                $balanced[] = $buffer;
+                $buffer = '';
+            }
+        }
+        if ($buffer !== '') {
+            $balanced[] = $buffer;
+        }
+        return $balanced;
+    }
+
+    /**
+     * 判断文本中的 <aN> 占位符是否成对出现
+     */
+    private static function hasBalancedPlaceholders($text) {
+        if (!preg_match_all('#</?a(\d+)>#', (string)$text, $matches)) {
+            return true;
+        }
+        $counts = array_count_values($matches[1]);
+        foreach ($counts as $count) {
+            if ($count % 2 !== 0) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**
