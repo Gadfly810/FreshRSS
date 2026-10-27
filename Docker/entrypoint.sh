@@ -74,6 +74,23 @@ fi
 
 php -f ./cli/prepare.php >/dev/null
 
+# ---- Seed configuration: on every cold start lay the fork's templates into DATA_PATH ----
+# prepare.php is what creates DATA_PATH, so this has to come after it.
+# The [ ! -f ] guards are mandatory: on a warm restart (same container) the
+# user's live configuration must not be overwritten.
+# DATA_PATH is empty by default (see Dockerfile ENV DATA_PATH=''); constants.php
+# then falls back to FRESHRSS_PATH/data, so mirror that fallback here instead of
+# writing to "/config.custom.php".
+SEED_DATA_PATH="${DATA_PATH:-/var/www/FreshRSS/data}"
+if [ -f /var/www/FreshRSS/Docker/config.custom.php ] && [ ! -f "$SEED_DATA_PATH/config.custom.php" ]; then
+	cp /var/www/FreshRSS/Docker/config.custom.php "$SEED_DATA_PATH/config.custom.php"
+fi
+if [ -f /var/www/FreshRSS/Docker/config-user.custom.php ] && [ ! -f "$SEED_DATA_PATH/config-user.custom.php" ]; then
+	cp /var/www/FreshRSS/Docker/config-user.custom.php "$SEED_DATA_PATH/config-user.custom.php"
+fi
+unset SEED_DATA_PATH
+# -----------------------------------------------------------------------------------
+
 if [ -n "$FRESHRSS_INSTALL" ]; then
 	# shellcheck disable=SC2046
 	php -f ./cli/do-install.php -- \
@@ -106,6 +123,20 @@ if [ -n "$FRESHRSS_USER" ]; then
 		exit $EXITCODE
 	fi
 fi
+
+# ---- Cold-start configuration restore: pull the encrypted snapshot once ----
+# Runs after create-user.php (so the user and its config.php exist) and before
+# Apache starts, so the very first HTTP request already sees the restored
+# configuration. Deliberately uses `||` and not `exit`: a failed pull must not
+# block the container, FreshRSS still runs on the seed configuration and the
+# user can retry with the "Force pull" button.
+# Must stay BEFORE the access-permissions.sh call below: the pull rewrites
+# users/<user>/config.php as root, so that script has to fix its group
+# afterwards or Apache cannot write to it any more.
+if [ -f ./cli/configsync-pull.php ]; then
+	php -f ./cli/configsync-pull.php || echo '⚠️ ConfigSync pull failed; retry from the extension page.'
+fi
+# --------------------------------------------------------------------------
 
 # Fix permissions of data added by prepare.php as well as a potential
 # installation/user setup
