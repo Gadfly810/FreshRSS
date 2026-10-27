@@ -117,7 +117,10 @@ if [ -n "$FRESHRSS_USER" ]; then
 		echo 'ℹ️ FreshRSS user already exists; no change performed.'
 	elif [ $EXITCODE -eq 0 ]; then
 		echo '✅ FreshRSS user successfully created.'
-		./cli/list-users.php | xargs -n1 ./cli/actualize-user.php --user
+		# The initial feed refresh happens further down, after the
+		# configuration restore: it must use the restored feed list and
+		# extension settings, not the seed ones.
+		USER_CREATED=1
 	else
 		echo '❌ FreshRSS error during the creation of a user!'
 		exit $EXITCODE
@@ -137,6 +140,18 @@ if [ -f ./cli/configsync-pull.php ]; then
 	php -f ./cli/configsync-pull.php || echo '⚠️ ConfigSync pull failed; retry from the extension page.'
 fi
 # --------------------------------------------------------------------------
+
+# Initial feed refresh for a freshly created user. Upstream runs this right
+# after create-user.php; it is moved here so that it works on the restored
+# configuration (feeds, extension settings) instead of the seed one.
+# The exit code is left alone: cli/actualize-user.php calls
+# done($nbUpdatedFeeds > 0), so a feed that is temporarily unreachable (503,
+# timeout) makes it exit 1 even though nothing is wrong on our side. That is
+# upstream behaviour and this script has no `set -e`, so it never blocked the
+# container anyway.
+if [ "$USER_CREATED" = '1' ]; then
+	./cli/list-users.php | xargs -n1 ./cli/actualize-user.php --user
+fi
 
 # Fix permissions of data added by prepare.php as well as a potential
 # installation/user setup
