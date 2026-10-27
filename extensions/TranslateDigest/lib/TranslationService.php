@@ -41,7 +41,8 @@ class TranslationService {
         Logger::debug('Text to translate: ' . mb_substr($text, 0, 50));
 
         try {
-            $translated = $this->provider->translate($text, 'auto', $this->targetLang);
+            $translated = $this->provider->translate(TextUtil::encodeNewlines($text), 'auto', $this->targetLang);
+            $translated = TextUtil::decodeNewlines($translated);
 
             if (empty($translated)) {
                 if ($serviceName !== 'google') {
@@ -82,7 +83,8 @@ class TranslationService {
      */
     private function fallbackToGoogle($text) {
         $fallback = ProviderFactory::create('google');
-        $result = $fallback->translate($text, 'auto', $this->targetLang) ?: $text;
+        $result = $fallback->translate(TextUtil::encodeNewlines($text), 'auto', $this->targetLang);
+        $result = TextUtil::decodeNewlines($result) ?: $text;
         Logger::info('Translation fallback - Service: GOOGLE | Result: ' . mb_substr($result, 0, 50));
         return $result;
     }
@@ -156,7 +158,15 @@ class TranslationService {
      */
     private function callProviderBatch(array $batchTexts) {
         try {
-            return $this->provider->translateBatch($batchTexts, 'auto', $this->targetLang) ?: [];
+            $encoded = [];
+            foreach ($batchTexts as $key => $text) {
+                $encoded[$key] = TextUtil::encodeNewlines($text);
+            }
+            $translated = $this->provider->translateBatch($encoded, 'auto', $this->targetLang) ?: [];
+            foreach ($translated as $key => $text) {
+                $translated[$key] = TextUtil::decodeNewlines($text);
+            }
+            return $translated;
         } catch (Throwable $e) {
             Logger::exception($e, 'Batch translation with ' . strtoupper($this->provider->getName()));
             return [];

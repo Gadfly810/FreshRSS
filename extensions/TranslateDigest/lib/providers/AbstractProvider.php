@@ -13,6 +13,12 @@ abstract class AbstractProvider implements ITranslationProvider {
     protected $model;
     protected $endpoint;
 
+    /** 网络/解析失败时的最大重试次数（不含首次请求） */
+    protected const MAX_RETRY = 2;
+
+    /** 重试间隔（毫秒） */
+    protected const RETRY_INTERVAL_MS = 1000;
+
     // Prompt 模板
     protected static $prompts = [
         'translate' => 'You are a professional translation engine. Output ONLY the translated text without explanation.',
@@ -59,30 +65,44 @@ abstract class AbstractProvider implements ITranslationProvider {
         ];
 
         $ctx = stream_context_create($options);
-        try {
-            $res = @file_get_contents($url, false, $ctx);
+
+        for ($attempt = 0; $attempt <= self::MAX_RETRY; $attempt++) {
+            if ($attempt > 0) {
+                Logger::debug($this->getName() . ' retry ' . $attempt . '/' . self::MAX_RETRY . ': ' . $url);
+                usleep(self::RETRY_INTERVAL_MS * 1000);
+            }
+
+            try {
+                $res = @file_get_contents($url, false, $ctx);
+            } catch (Throwable $e) {
+                Logger::exception($e, $this->getName() . ' request');
+                $res = false;
+            }
+
+            // 网络失败：可重试
             if ($res === false) {
                 Logger::error($this->getName() . ' request failed: ' . $url);
-                return null;
+                continue;
             }
 
             Logger::debug($this->getName() . ' raw response: ' . substr($res, 0, 500));
 
             $data = json_decode($res, true);
+            // 响应不是 JSON（网关超时页、限流页等）：可重试
             if (!is_array($data)) {
                 Logger::error($this->getName() . ' invalid JSON response: ' . substr($res, 0, 200));
-                return null;
+                continue;
             }
 
+            // 业务错误（鉴权失败、参数错误等）：重试无意义
             if ($this->isErrorResponse($data)) {
                 return null;
             }
 
             return $data;
-        } catch (Exception $e) {
-            Logger::exception($e, $this->getName() . ' request');
-            return null;
         }
+
+        return null;
     }
 
     /**
@@ -117,18 +137,37 @@ abstract class AbstractProvider implements ITranslationProvider {
         ];
 
         $ctx = stream_context_create($options);
-        try {
-            $res = @file_get_contents($url, false, $ctx);
+
+        for ($attempt = 0; $attempt <= self::MAX_RETRY; $attempt++) {
+            if ($attempt > 0) {
+                Logger::debug($this->getName() . ' GET retry ' . $attempt . '/' . self::MAX_RETRY . ': ' . $url);
+                usleep(self::RETRY_INTERVAL_MS * 1000);
+            }
+
+            try {
+                $res = @file_get_contents($url, false, $ctx);
+            } catch (Throwable $e) {
+                Logger::exception($e, $this->getName() . ' GET request');
+                $res = false;
+            }
+
             if ($res === false) {
                 Logger::error($this->getName() . ' GET request failed: ' . $url);
-                return null;
+                continue;
             }
+
             Logger::debug($this->getName() . ' GET raw response: ' . substr($res, 0, 500));
-            return json_decode($res, true);
-        } catch (Exception $e) {
-            Logger::exception($e, $this->getName() . ' GET request');
-            return null;
+
+            $data = json_decode($res, true);
+            if (!is_array($data)) {
+                Logger::error($this->getName() . ' GET invalid JSON response: ' . substr($res, 0, 200));
+                continue;
+            }
+
+            return $data;
         }
+
+        return null;
     }
 
     /**

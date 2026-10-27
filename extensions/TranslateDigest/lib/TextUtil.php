@@ -158,40 +158,64 @@ class TextUtil {
      * @return string 可插入页面的 HTML
      */
     public static function restoreInlineTags($text, array $tags) {
-        $escaped = self::escapeHtml((string)$text);
-        if (empty($tags)) {
-            return $escaped;
-        }
+        $text = self::decodeNewlines((string)$text);
+        $escaped = self::escapeHtml($text);
+        // 模型常用 <br> 代替换行，转义后把它们恢复成真实换行，最后统一渲染为 <br>
+        $escaped = preg_replace('#&lt;br\s*/?&gt;#i', "\n", $escaped);
 
-        // 先把占位符换成临时标记，便于统计开闭是否成对
-        $pairs = [];
-        foreach ($tags as $id => $tag) {
-            $openToken = "\x01O{$id}\x02";
-            $closeToken = "\x01C{$id}\x02";
-            $escaped = str_replace(
-                ['&lt;a' . $id . '&gt;', '&lt;/a' . $id . '&gt;'],
-                [$openToken, $closeToken],
-                $escaped
-            );
-            $pairs[$id] = ['open' => $openToken, 'close' => $closeToken, 'tag' => $tag];
-        }
-
-        foreach ($pairs as $id => $pair) {
-            $openCount = substr_count($escaped, $pair['open']);
-            $closeCount = substr_count($escaped, $pair['close']);
-            if ($openCount === 0 && $closeCount === 0) {
-                continue;
+        if (!empty($tags)) {
+            // 先把占位符换成临时标记，便于统计开闭是否成对
+            $pairs = [];
+            foreach ($tags as $id => $tag) {
+                $openToken = "\x01O{$id}\x02";
+                $closeToken = "\x01C{$id}\x02";
+                $escaped = str_replace(
+                    ['&lt;a' . $id . '&gt;', '&lt;/a' . $id . '&gt;'],
+                    [$openToken, $closeToken],
+                    $escaped
+                );
+                $pairs[$id] = ['open' => $openToken, 'close' => $closeToken, 'tag' => $tag];
             }
-            if ($openCount !== $closeCount || $openCount > 1) {
-                // 不成对或重复：丢弃该标签，只留文字
-                $escaped = str_replace([$pair['open'], $pair['close']], '', $escaped);
-                continue;
+
+            foreach ($pairs as $id => $pair) {
+                $openCount = substr_count($escaped, $pair['open']);
+                $closeCount = substr_count($escaped, $pair['close']);
+                if ($openCount === 0 && $closeCount === 0) {
+                    continue;
+                }
+                if ($openCount !== $closeCount || $openCount > 1) {
+                    // 不成对或重复：丢弃该标签，只留文字
+                    $escaped = str_replace([$pair['open'], $pair['close']], '', $escaped);
+                    continue;
+                }
+                $escaped = str_replace([$pair['open'], $pair['close']], [$pair['tag']['open'], $pair['tag']['close']], $escaped);
             }
-            $escaped = str_replace([$pair['open'], $pair['close']], [$pair['tag']['open'], $pair['tag']['close']], $escaped);
+
+            // 清掉模型遗留的占位符残骸
+            $escaped = preg_replace('/&lt;\/?a\d+&gt;/', '', $escaped);
         }
 
-        // 清掉模型遗留的占位符残骸
-        return preg_replace('/&lt;\/?a\d+&gt;/', '', $escaped);
+        // 换行统一渲染为 <br>（<p> 内换行否则会变成空白）
+        return str_replace("\n", '<br>', $escaped);
+    }
+
+    /**
+     * 换行保护：规范化换行并转成 <br>，避免发送时被模型当成空白丢掉
+     * @param string $text 文本
+     * @return string
+     */
+    public static function encodeNewlines($text) {
+        $text = str_replace(["\r\n", "\r"], "\n", (string)$text);
+        return str_replace("\n", '<br>', $text);
+    }
+
+    /**
+     * 换行保护：把 <br> 及其变体还原成换行符
+     * @param string $text 文本
+     * @return string
+     */
+    public static function decodeNewlines($text) {
+        return preg_replace('#<br\s*/?>#i', "\n", (string)$text);
     }
 
     /**
