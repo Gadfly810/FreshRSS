@@ -294,7 +294,6 @@
             <input id="deepseek-model" type="text" name="DeepSeekModel" 
                 value="<?php echo htmlspecialchars($config['DeepSeekModel'] ?? 'deepseek-chat', ENT_QUOTES); ?>" 
                 placeholder="deepseek-chat">
-            <span class="help-text">默认: deepseek-chat</span>
         </div>
     </div>
 
@@ -318,11 +317,6 @@
             <input id="gemini-model" type="text" name="GeminiModel" 
                 value="<?php echo htmlspecialchars($config['GeminiModel'] ?? 'gemini-2.5-flash', ENT_QUOTES); ?>" 
                 placeholder="gemini-2.5-flash">
-            <span class="help-text">
-                默认: gemini-2.5-flash（推荐稳定版本）<br>
-                支持: gemini-3-pro-preview, gemini-2.5-flash/lite/pro, gemini-1.5-flash/pro<br>
-                ⚠️ Gemini 2.0 系列将于 2026 年 2 月弃用
-            </span>
         </div>
     </div>
 
@@ -393,9 +387,6 @@
             <input id="openai-model" type="text" name="OpenAIModel" 
                 value="<?php echo htmlspecialchars($config['OpenAIModel'] ?? '', ENT_QUOTES); ?>" 
                 placeholder="gpt-4o-mini">
-            <span class="help-text">
-                默认: gpt-4o-mini；可填任意该服务支持的模型名，如 <code>llama3.1</code>、<code>qwen2.5:7b</code>
-            </span>
         </div>
     </div>
 
