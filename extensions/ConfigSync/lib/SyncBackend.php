@@ -75,10 +75,37 @@ final class ConfigSyncHttp {
 
 		$context = stream_context_create(['http' => $options]);
 
-		// error_get_last() is process-global: clear it so that a stale warning
-		// from an unrelated call cannot be reported as this request's failure.
-		error_clear_last();
-		$response = @file_get_contents($url, false, $context);
+		// FreshRSS calls unregister_unsafe_protocols() at bootstrap
+		// (lib/lib_rss.php), which removes every wrapper except file and php.
+		// Without this the https:// URL is not recognised as a URL at all: PHP
+		// falls back to plain file access and fails with the misleading
+		// "Failed to open stream: No such file or directory". Restore the
+		// wrappers for the duration of this request and remove them again
+		// afterwards, so the hardening the application asked for stays in place.
+		$restored = [];
+		$scheme = strtolower((string)(parse_url($url, PHP_URL_SCHEME) ?? ''));
+		if ($scheme === 'https' || $scheme === 'http') {
+			if (!in_array($scheme, stream_get_wrappers(), true)) {
+				if (@stream_wrapper_restore($scheme)) {
+					$restored[] = $scheme;
+				} else {
+					$this->lastError = 'the ' . $scheme . ' stream wrapper is not available in this PHP build';
+					return null;
+				}
+			}
+		}
+
+		try {
+			// error_get_last() is process-global: clear it so that a stale warning
+			// from an unrelated call cannot be reported as this request's failure.
+			error_clear_last();
+			$response = @file_get_contents($url, false, $context);
+			$error = error_get_last();
+		} finally {
+			foreach ($restored as $protocol) {
+				@stream_wrapper_unregister($protocol);
+			}
+		}
 
 		$responseHeaders = function_exists('http_get_last_response_headers')
 			? (http_get_last_response_headers() ?? [])
@@ -92,8 +119,7 @@ final class ConfigSyncHttp {
 		}
 
 		if ($response === false) {
-			$err = error_get_last();
-			$this->lastError = 'transport failure: ' . ($err['message'] ?? 'unknown error');
+			$this->lastError = 'transport failure: ' . ($error['message'] ?? 'unknown error');
 			return null;
 		}
 
