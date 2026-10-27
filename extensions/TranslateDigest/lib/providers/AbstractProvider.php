@@ -82,6 +82,47 @@ abstract class AbstractProvider implements ITranslationProvider {
     }
 
     /**
+     * 执行 HTTP GET 请求
+     * @param string $url 请求地址
+     * @param array $headers 请求头（字符串数组）
+     * @param int $timeout 超时时间（秒）
+     * @return array|null 响应数据
+     */
+    protected function httpGet($url, $headers = [], $timeout = 15) {
+        $options = [
+            'http' => [
+                'method' => 'GET',
+                'header' => $headers,
+                'timeout' => $timeout,
+                'ignore_errors' => true
+            ]
+        ];
+
+        $ctx = stream_context_create($options);
+        try {
+            $res = @file_get_contents($url, false, $ctx);
+            if ($res === false) {
+                Logger::error($this->getName() . ' GET request failed: ' . $url);
+                return null;
+            }
+            Logger::debug($this->getName() . ' GET raw response: ' . substr($res, 0, 500));
+            return json_decode($res, true);
+        } catch (Exception $e) {
+            Logger::exception($e, $this->getName() . ' GET request');
+            return null;
+        }
+    }
+
+    /**
+     * 获取该服务可用的模型列表
+     * 默认实现：不支持
+     * @return array ['ok' => bool, 'models' => string[], 'message' => string]
+     */
+    public function listModels() {
+        return ['ok' => false, 'models' => [], 'message' => '该服务不支持获取模型列表'];
+    }
+
+    /**
      * 从响应数据中提取 token 信息
      */
     protected function extractTokenInfo($data) {
@@ -108,14 +149,14 @@ abstract class AbstractProvider implements ITranslationProvider {
      * 获取翻译 Prompt
      */
     protected function getTranslatePrompt($text, $targetLang) {
-        return self::$prompts['translate'] . '\n\nTranslate into ' . $targetLang . ': ' . $text;
+        return self::$prompts['translate'] . "\n\nTranslate into " . $targetLang . ': ' . $text;
     }
 
     /**
      * 获取摘要 Prompt
      */
     protected function getSummarizePrompt($text, $targetLang, $maxChars) {
-        return self::$prompts['summarize'] . '\n\nSummarize in ' . $targetLang . ' within ' . $maxChars . ' characters: ' . $text;
+        return self::$prompts['summarize'] . "\n\nSummarize in " . $targetLang . ' within ' . $maxChars . ' characters: ' . $text;
     }
 
     /**

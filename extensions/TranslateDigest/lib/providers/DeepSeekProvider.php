@@ -2,17 +2,22 @@
 require_once('AbstractProvider.php');
 
 class DeepSeekProvider extends AbstractProvider {
-    private $allowedModels = ['deepseek-chat', 'deepseek-reasoner'];
 
     public function __construct() {
         $this->apiKey = FreshRSS_Context::$user_conf->DeepSeekApiKey ?? '';
-        $configuredModel = FreshRSS_Context::$user_conf->DeepSeekModel ?? 'deepseek-chat';
-        $this->model = in_array($configuredModel, $this->allowedModels, true) ? $configuredModel : 'deepseek-chat';
+        $this->model = trim(FreshRSS_Context::$user_conf->DeepSeekModel ?? '');
         $this->endpoint = 'https://api.deepseek.com/chat/completions';
     }
 
     public function setApiKey($apiKey) {
         $this->apiKey = $apiKey;
+    }
+
+    public function setModel($model) {
+        $model = trim($model);
+        if ($model !== '') {
+            $this->model = $model;
+        }
     }
 
     public function getName() {
@@ -27,7 +32,7 @@ class DeepSeekProvider extends AbstractProvider {
     }
 
     public function translate($text, $sourceLang = 'auto', $targetLang = 'zh') {
-        if (empty($this->apiKey) || empty(trim($text))) {
+        if (empty($this->apiKey) || $this->model === '' || empty(trim($text))) {
             return '';
         }
 
@@ -90,6 +95,9 @@ class DeepSeekProvider extends AbstractProvider {
         if (empty($this->apiKey)) {
             return ['ok' => false, 'message' => '未配置 DeepSeek API Key'];
         }
+        if ($this->model === '') {
+            return ['ok' => false, 'message' => '未配置 DeepSeek 模型'];
+        }
 
         $payload = [
             'model' => $this->model,
@@ -107,8 +115,38 @@ class DeepSeekProvider extends AbstractProvider {
         return ['ok' => true, 'message' => 'DeepSeek Key 验证通过'];
     }
 
+    /**
+     * 通过 GET https://api.deepseek.com/models 获取可用模型列表
+     */
+    public function listModels() {
+        if (empty($this->apiKey)) {
+            return ['ok' => false, 'models' => [], 'message' => '未配置 DeepSeek API Key'];
+        }
+
+        $data = $this->httpGet('https://api.deepseek.com/models', $this->getHeaders());
+        if ($data === null) {
+            return ['ok' => false, 'models' => [], 'message' => '请求模型列表失败'];
+        }
+        if (isset($data['error'])) {
+            $msg = is_array($data['error']) ? ($data['error']['message'] ?? 'unknown') : (string)$data['error'];
+            return ['ok' => false, 'models' => [], 'message' => $msg];
+        }
+        if (!isset($data['data']) || !is_array($data['data'])) {
+            return ['ok' => false, 'models' => [], 'message' => '响应中没有模型列表'];
+        }
+
+        $models = [];
+        foreach ($data['data'] as $item) {
+            if (is_array($item) && !empty($item['id'])) {
+                $models[] = $item['id'];
+            }
+        }
+        sort($models);
+        return ['ok' => true, 'models' => $models, 'message' => '共 ' . count($models) . ' 个模型'];
+    }
+
     public function getDefaultModel() {
-        return 'deepseek-chat';
+        return '';
     }
 }
 

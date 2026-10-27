@@ -12,7 +12,7 @@ require_once(__DIR__ . '/AbstractProvider.php');
  *   OpenAIApiKey   访问密钥（本地服务如 Ollama 可留空）
  *   OpenAIEndpoint 接口地址，可填 Base URL（https://api.openai.com/v1）
  *                  或完整地址（https://api.openai.com/v1/chat/completions）
- *   OpenAIModel    模型名，默认 gpt-4o-mini
+ *   OpenAIModel    模型名，可留空后从模型列表中选择
  */
 class OpenAICompatibleProvider extends AbstractProvider {
 
@@ -20,8 +20,7 @@ class OpenAICompatibleProvider extends AbstractProvider {
 
     public function __construct() {
         $this->apiKey = FreshRSS_Context::$user_conf->OpenAIApiKey ?? '';
-        $configuredModel = trim(FreshRSS_Context::$user_conf->OpenAIModel ?? '');
-        $this->model = $configuredModel !== '' ? $configuredModel : $this->getDefaultModel();
+        $this->model = trim(FreshRSS_Context::$user_conf->OpenAIModel ?? '');
 
         $configuredEndpoint = trim(FreshRSS_Context::$user_conf->OpenAIEndpoint ?? '');
         $this->endpoint = $this->normalizeEndpoint($configuredEndpoint);
@@ -80,7 +79,7 @@ class OpenAICompatibleProvider extends AbstractProvider {
     }
 
     public function translate($text, $sourceLang = 'auto', $targetLang = 'zh') {
-        if (empty(trim($text))) {
+        if ($this->model === '' || empty(trim($text))) {
             return '';
         }
 
@@ -121,6 +120,10 @@ class OpenAICompatibleProvider extends AbstractProvider {
     }
 
     public function validateKey() {
+        if ($this->model === '') {
+            return ['ok' => false, 'message' => '未配置 OpenAI 模型'];
+        }
+
         $isLocal = (bool)preg_match('#^https?://(127\.0\.0\.1|localhost|\[::1\])#i', $this->endpoint);
         if (empty($this->apiKey) && !$isLocal) {
             return ['ok' => false, 'message' => '未配置 OpenAI 兼容服务 API Key'];
@@ -142,7 +145,39 @@ class OpenAICompatibleProvider extends AbstractProvider {
         return ['ok' => true, 'message' => 'OpenAI 兼容服务验证通过（模型: ' . $this->model . '）'];
     }
 
+    /**
+     * 通过 GET {base}/models 获取可用模型列表
+     */
+    public function listModels() {
+        $base = $this->endpoint;
+        $suffix = '/chat/completions';
+        if (substr($base, -strlen($suffix)) === $suffix) {
+            $base = substr($base, 0, -strlen($suffix));
+        }
+
+        $data = $this->httpGet(rtrim($base, '/') . '/models', $this->getHeaders());
+        if ($data === null) {
+            return ['ok' => false, 'models' => [], 'message' => '请求模型列表失败'];
+        }
+        if (isset($data['error'])) {
+            $msg = is_array($data['error']) ? ($data['error']['message'] ?? 'unknown') : (string)$data['error'];
+            return ['ok' => false, 'models' => [], 'message' => $msg];
+        }
+        if (!isset($data['data']) || !is_array($data['data'])) {
+            return ['ok' => false, 'models' => [], 'message' => '响应中没有模型列表'];
+        }
+
+        $models = [];
+        foreach ($data['data'] as $item) {
+            if (is_array($item) && !empty($item['id'])) {
+                $models[] = $item['id'];
+            }
+        }
+        sort($models);
+        return ['ok' => true, 'models' => $models, 'message' => '共 ' . count($models) . ' 个模型'];
+    }
+
     public function getDefaultModel() {
-        return 'gpt-4o-mini';
+        return '';
     }
 }

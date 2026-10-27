@@ -108,6 +108,31 @@
     flex: 1;
 }
 
+/* 模型选择器 */
+.model-picker {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.model-picker input {
+    flex: 1 1 260px;
+    min-width: 200px;
+}
+
+.fetch-status {
+    color: #666;
+}
+
+.fetch-status.ok {
+    color: #2a7a2a;
+}
+
+.fetch-status.err {
+    color: #c00;
+}
+
 /* 验证状态 */
 .validation-status {
     display: inline-block;
@@ -152,9 +177,9 @@
     $config = [
         'TranslateDefaultService' => $conf->TranslateDefaultService ?? 'google',
         'DeepSeekApiKey' => $conf->DeepSeekApiKey ?? '',
-        'DeepSeekModel' => $conf->DeepSeekModel ?? 'deepseek-chat',
+        'DeepSeekModel' => $conf->DeepSeekModel ?? '',
         'GeminiApiKey' => $conf->GeminiApiKey ?? '',
-        'GeminiModel' => $conf->GeminiModel ?? 'gemini-2.0-flash-exp',
+        'GeminiModel' => $conf->GeminiModel ?? '',
         'DeepLApiKey' => $conf->DeepLApiKey ?? '',
         'DeepLEndpoint' => $conf->DeepLEndpoint ?? '',
         'OpenAIApiKey' => $conf->OpenAIApiKey ?? '',
@@ -291,9 +316,16 @@
     <div class="form-group">
         <label class="group-name" for="deepseek-model">DeepSeek 模型:</label>
         <div class="group-controls">
-            <input id="deepseek-model" type="text" name="DeepSeekModel" 
-                value="<?php echo htmlspecialchars($config['DeepSeekModel'] ?? 'deepseek-chat', ENT_QUOTES); ?>" 
-                placeholder="deepseek-chat">
+            <div class="model-picker">
+                <input id="deepseek-model" type="text" name="DeepSeekModel" list="deepseek-model-list"
+                    value="<?php echo htmlspecialchars($config['DeepSeekModel'] ?? '', ENT_QUOTES); ?>"
+                    placeholder="点击右侧按钮获取模型列表">
+                <datalist id="deepseek-model-list"></datalist>
+                <button type="button" class="btn btn-small fetch-models"
+                    data-service="deepseek" data-target="deepseek-model" data-list="deepseek-model-list"
+                    data-key-input="deepseek-key">获取模型列表</button>
+            </div>
+            <span class="help-text fetch-status" data-service="deepseek"></span>
         </div>
     </div>
 
@@ -314,9 +346,16 @@
     <div class="form-group">
         <label class="group-name" for="gemini-model">Gemini 模型:</label>
         <div class="group-controls">
-            <input id="gemini-model" type="text" name="GeminiModel" 
-                value="<?php echo htmlspecialchars($config['GeminiModel'] ?? 'gemini-2.5-flash', ENT_QUOTES); ?>" 
-                placeholder="gemini-2.5-flash">
+            <div class="model-picker">
+                <input id="gemini-model" type="text" name="GeminiModel" list="gemini-model-list"
+                    value="<?php echo htmlspecialchars($config['GeminiModel'] ?? '', ENT_QUOTES); ?>"
+                    placeholder="点击右侧按钮获取模型列表">
+                <datalist id="gemini-model-list"></datalist>
+                <button type="button" class="btn btn-small fetch-models"
+                    data-service="gemini" data-target="gemini-model" data-list="gemini-model-list"
+                    data-key-input="gemini-key">获取模型列表</button>
+            </div>
+            <span class="help-text fetch-status" data-service="gemini"></span>
         </div>
     </div>
 
@@ -384,9 +423,16 @@
     <div class="form-group">
         <label class="group-name" for="openai-model">OpenAI 模型:</label>
         <div class="group-controls">
-            <input id="openai-model" type="text" name="OpenAIModel" 
-                value="<?php echo htmlspecialchars($config['OpenAIModel'] ?? '', ENT_QUOTES); ?>" 
-                placeholder="gpt-4o-mini">
+            <div class="model-picker">
+                <input id="openai-model" type="text" name="OpenAIModel" list="openai-model-list"
+                    value="<?php echo htmlspecialchars($config['OpenAIModel'] ?? '', ENT_QUOTES); ?>"
+                    placeholder="点击右侧按钮获取模型列表">
+                <datalist id="openai-model-list"></datalist>
+                <button type="button" class="btn btn-small fetch-models"
+                    data-service="openai" data-target="openai-model" data-list="openai-model-list"
+                    data-key-input="openai-key" data-endpoint-input="openai-endpoint">获取模型列表</button>
+            </div>
+            <span class="help-text fetch-status" data-service="openai"></span>
         </div>
     </div>
 
@@ -468,7 +514,69 @@
 </div>
 
 <script>
+(function () {
+    var ajaxUrl = <?php echo json_encode(_url('extension', 'configure', 'e', urlencode($this->getName())), JSON_UNESCAPED_SLASHES); ?>;
 
+    function setStatus(service, text, cls) {
+        var el = document.querySelector('.fetch-status[data-service="' + service + '"]');
+        if (!el) { return; }
+        el.textContent = text;
+        el.className = 'help-text fetch-status' + (cls ? ' ' + cls : '');
+    }
 
+    function fillDatalist(listId, models) {
+        var list = document.getElementById(listId);
+        if (!list) { return; }
+        list.innerHTML = '';
+        models.forEach(function (m) {
+            var opt = document.createElement('option');
+            opt.value = m;
+            list.appendChild(opt);
+        });
+    }
 
+    document.querySelectorAll('.fetch-models').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            var service = btn.dataset.service;
+            var targetId = btn.dataset.target;
+            var listId = btn.dataset.list;
+            var keyEl = document.getElementById(btn.dataset.keyInput || '');
+            var epEl = document.getElementById(btn.dataset.endpointInput || '');
+            var modelEl = document.getElementById(targetId);
+
+            var params = new URLSearchParams();
+            params.set('_action', 'list_models');
+            params.set('service', service);
+            if (keyEl && keyEl.value) { params.set('api-key', keyEl.value); }
+            if (epEl && epEl.value) { params.set('endpoint', epEl.value); }
+            if (modelEl && modelEl.value) { params.set('model', modelEl.value); }
+
+            var original = btn.textContent;
+            btn.disabled = true;
+            btn.textContent = '获取中...';
+            setStatus(service, '', '');
+
+            fetch(ajaxUrl + (ajaxUrl.indexOf('?') === -1 ? '?' : '&') + params.toString(), {
+                credentials: 'same-origin',
+                headers: { 'X-Requested-With': 'XMLHttpRequest' }
+            })
+                .then(function (r) { return r.json(); })
+                .then(function (data) {
+                    if (data && data.success && data.models && data.models.length) {
+                        fillDatalist(listId, data.models);
+                        setStatus(service, '✓ ' + (data.message || ('共 ' + data.models.length + ' 个模型')) + '，点击输入框选择', 'ok');
+                    } else {
+                        setStatus(service, '✗ ' + ((data && data.message) || '获取失败'), 'err');
+                    }
+                })
+                .catch(function (err) {
+                    setStatus(service, '✗ 请求失败: ' + err.message, 'err');
+                })
+                .finally(function () {
+                    btn.disabled = false;
+                    btn.textContent = original;
+                });
+        });
+    });
+})();
 </script>

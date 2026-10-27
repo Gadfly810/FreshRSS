@@ -2,24 +2,23 @@
 require_once('AbstractProvider.php');
 
 class GeminiProvider extends AbstractProvider {
-    private $allowedModels = [
-        // Gemini 3 系列（最新）
-        'gemini-3-pro-preview',
-        // Gemini 2.5 系列（稳定版本，推荐使用）
-        'gemini-2.5-flash',
-        'gemini-2.5-flash-lite',
-        'gemini-2.5-pro',
-        // Gemini 1.5 系列
-        'gemini-1.5-flash',
-        'gemini-1.5-pro'
-        // 注意：Gemini 2.0 系列将于 2026 年 2 月弃用，已移除
-    ];
 
     public function __construct() {
         $this->apiKey = FreshRSS_Context::$user_conf->GeminiApiKey ?? '';
-        $configuredModel = FreshRSS_Context::$user_conf->GeminiModel ?? 'gemini-2.5-flash';
-        $this->model = in_array($configuredModel, $this->allowedModels, true) ? $configuredModel : 'gemini-2.5-flash';
-        $this->endpoint = 'https://generativelanguage.googleapis.com/v1beta/models/' . $this->model . ':generateContent';
+        $this->model = trim(FreshRSS_Context::$user_conf->GeminiModel ?? '');
+        $this->endpoint = $this->buildEndpoint($this->model);
+    }
+
+    public function setModel($model) {
+        $model = trim($model);
+        if ($model !== '') {
+            $this->model = $model;
+            $this->endpoint = $this->buildEndpoint($model);
+        }
+    }
+
+    private function buildEndpoint($model) {
+        return 'https://generativelanguage.googleapis.com/v1beta/models/' . $model . ':generateContent';
     }
 
     public function setApiKey($apiKey) {
@@ -38,11 +37,11 @@ class GeminiProvider extends AbstractProvider {
     }
 
     public function translate($text, $sourceLang = 'auto', $targetLang = 'zh') {
-        if (empty($this->apiKey) || empty(trim($text))) {
+        if (empty($this->apiKey) || $this->model === '' || empty(trim($text))) {
             return '';
         }
 
-        $prompt = self::$prompts['translate'] . '\n\nTranslate into ' . $targetLang . ': ' . $text;
+        $prompt = $this->getTranslatePrompt($text, $targetLang);
         
         $payload = [
             'contents' => [
@@ -77,7 +76,7 @@ class GeminiProvider extends AbstractProvider {
             return '';
         }
 
-        $prompt = self::$prompts['summarize'] . '\n\nSummarize in ' . $targetLang . ' within ' . $maxChars . ' characters: ' . $clean;
+        $prompt = $this->getSummarizePrompt($clean, $targetLang, $maxChars);
         
         $payload = [
             'contents' => [
@@ -103,6 +102,9 @@ class GeminiProvider extends AbstractProvider {
         if (empty($this->apiKey)) {
             return ['ok' => false, 'message' => '未配置 Gemini API Key'];
         }
+        if ($this->model === '') {
+            return ['ok' => false, 'message' => '未配置 Gemini 模型'];
+        }
 
         $payload = [
             'contents' => [
@@ -122,8 +124,46 @@ class GeminiProvider extends AbstractProvider {
         return ['ok' => true, 'message' => 'Gemini Key 验证通过'];
     }
 
+    /**
+     * 通过 GET {base}/v1beta/models 获取可用模型列表
+     */
+    public function listModels() {
+        if (empty($this->apiKey)) {
+            return ['ok' => false, 'models' => [], 'message' => '未配置 Gemini API Key'];
+        }
+
+        $url = 'https://generativelanguage.googleapis.com/v1beta/models?key=' . urlencode($this->apiKey);
+        $data = $this->httpGet($url, ['Content-Type: application/json']);
+        if ($data === null) {
+            return ['ok' => false, 'models' => [], 'message' => '请求模型列表失败'];
+        }
+        if (isset($data['error'])) {
+            $msg = is_array($data['error']) ? ($data['error']['message'] ?? 'unknown') : (string)$data['error'];
+            return ['ok' => false, 'models' => [], 'message' => $msg];
+        }
+        if (!isset($data['models']) || !is_array($data['models'])) {
+            return ['ok' => false, 'models' => [], 'message' => '响应中没有模型列表'];
+        }
+
+        $models = [];
+        foreach ($data['models'] as $item) {
+            $name = is_array($item) ? ($item['name'] ?? '') : '';
+            if ($name === '') {
+                continue;
+            }
+            // 只保留支持 generateContent 的模型
+            if (isset($item['supportedGenerationMethods']) && is_array($item['supportedGenerationMethods'])
+                && !in_array('generateContent', $item['supportedGenerationMethods'], true)) {
+                continue;
+            }
+            $models[] = preg_replace('#^models/#', '', $name);
+        }
+        sort($models);
+        return ['ok' => true, 'models' => $models, 'message' => '共 ' . count($models) . ' 个模型'];
+    }
+
     public function getDefaultModel() {
-        return 'gemini-2.5-flash';
+        return '';
     }
 
     /**

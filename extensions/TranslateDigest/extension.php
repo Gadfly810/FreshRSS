@@ -59,6 +59,11 @@ class TranslateDigestExtension extends Minz_Extension {
             }
         }
 
+        if (Minz_Request::param('_action') === 'list_models') {
+            $this->handleListModelsAction();
+            return;
+        }
+
         if (Minz_Request::isPost()) {
             Logger::info('Configure action: POST request received');
 
@@ -69,10 +74,10 @@ class TranslateDigestExtension extends Minz_Extension {
             $targetLang = Minz_Request::param('TranslateTargetLang', 'zh');
             $deepseekKey = Minz_Request::param('DeepSeekApiKey', '');
             $deepseekMasked = empty($deepseekKey) ? '' : (substr($deepseekKey, 0, 4) . '...' . substr($deepseekKey, -4));
-            $deepseekModel = Minz_Request::param('DeepSeekModel', 'deepseek-chat');
+            $deepseekModel = trim(Minz_Request::param('DeepSeekModel', ''));
             $geminiKey = Minz_Request::param('GeminiApiKey', '');
             $geminiMasked = empty($geminiKey) ? '' : (substr($geminiKey, 0, 4) . '...' . substr($geminiKey, -4));
-            $geminiModel = Minz_Request::param('GeminiModel', 'gemini-2.0-flash-exp');
+            $geminiModel = trim(Minz_Request::param('GeminiModel', ''));
             $deeplKey = Minz_Request::param('DeepLApiKey', '');
             $deeplMasked = empty($deeplKey) ? '' : (substr($deeplKey, 0, 4) . '...' . substr($deeplKey, -4));
             $deeplEndpoint = Minz_Request::param('DeepLEndpoint', '');
@@ -97,6 +102,9 @@ class TranslateDigestExtension extends Minz_Extension {
                 try {
                     $provider = new DeepSeekProvider();
                     $provider->setApiKey($deepseekKey);
+                    if (!empty($deepseekModel)) {
+                        $provider->setModel($deepseekModel);
+                    }
                     $result = $provider->validateKey();
                     if (!$result['ok']) {
                         $errorMsg = 'DeepSeek API Key 验证失败: ' . $result['message'];
@@ -123,6 +131,9 @@ class TranslateDigestExtension extends Minz_Extension {
                 try {
                     $provider = new GeminiProvider();
                     $provider->setApiKey($geminiKey);
+                    if (!empty($geminiModel)) {
+                        $provider->setModel($geminiModel);
+                    }
                     $result = $provider->validateKey();
                     if (!$result['ok']) {
                         $errorMsg = 'Gemini API Key 验证失败: ' . $result['message'];
@@ -386,7 +397,9 @@ class TranslateDigestExtension extends Minz_Extension {
         header('Content-Type: application/json');
         $service = Minz_Request::param('service', '');
         $apiKey = Minz_Request::param('api-key', '');
-        
+        $endpoint = trim(Minz_Request::param('endpoint', ''));
+        $model = trim(Minz_Request::param('model', ''));
+
         // 记录请求（API Key 使用掩码避免泄露）
         $maskedKey = empty($apiKey) ? '' : (substr($apiKey, 0, 4) . '...' . substr($apiKey, -4));
         Logger::info("ValidateKeyAction received: service=$service, apiKeyMasked=$maskedKey");
@@ -428,7 +441,17 @@ class TranslateDigestExtension extends Minz_Extension {
             
             Logger::debug("ValidateKeyAction instantiating provider: $providerClass");
             $provider = new $providerClass();
-            $result = $provider->validateKey($apiKey);
+            // 使用表单里当前填写的值（可能尚未保存），避免验证旧配置
+            if (!empty($apiKey) && method_exists($provider, 'setApiKey')) {
+                $provider->setApiKey($apiKey);
+            }
+            if (!empty($endpoint) && method_exists($provider, 'setEndpoint')) {
+                $provider->setEndpoint($endpoint);
+            }
+            if (!empty($model) && method_exists($provider, 'setModel')) {
+                $provider->setModel($model);
+            }
+            $result = $provider->validateKey();
             $ok = is_array($result) ? ($result['ok'] ?? false) : (bool)$result;
             $msg = is_array($result) ? ($result['message'] ?? ($ok ? 'API Key 有效' : 'API Key 无效或无法连接')) : ($ok ? 'API Key 有效' : 'API Key 无效或无法连接');
             Logger::info("ValidateKeyAction result: ok=" . ($ok ? 'true' : 'false') . ", message=$msg");
@@ -437,6 +460,82 @@ class TranslateDigestExtension extends Minz_Extension {
         } catch (Exception $e) {
             Logger::exception($e, 'Validate key action');
             echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+        }
+    }
+
+    /**
+     * 获取指定服务可用的模型列表（供配置页下拉框使用）
+     * GET 参数：service, api-key, endpoint, model
+     */
+    public function handleListModelsAction() {
+        header('Content-Type: application/json; charset=utf-8');
+
+        $service = Minz_Request::param('service', '');
+        $apiKey = Minz_Request::param('api-key', '');
+        $endpoint = trim(Minz_Request::param('endpoint', ''));
+        $model = trim(Minz_Request::param('model', ''));
+
+        if (empty($service)) {
+            echo json_encode(['success' => false, 'models' => [], 'message' => '缺少 service 参数'], JSON_UNESCAPED_UNICODE);
+            return;
+        }
+
+        $maskedKey = empty($apiKey) ? '' : (substr($apiKey, 0, 4) . '...' . substr($apiKey, -4));
+        Logger::info("ListModelsAction received: service=$service, apiKeyMasked=$maskedKey");
+
+        try {
+            switch ($service) {
+                case 'deepseek':
+                    require_once('lib/providers/DeepSeekProvider.php');
+                    $provider = new DeepSeekProvider();
+                    if (!empty($apiKey)) {
+                        $provider->setApiKey($apiKey);
+                    }
+                    break;
+                case 'gemini':
+                    require_once('lib/providers/GeminiProvider.php');
+                    $provider = new GeminiProvider();
+                    if (!empty($apiKey)) {
+                        $provider->setApiKey($apiKey);
+                    }
+                    if (!empty($model)) {
+                        $provider->setModel($model);
+                    }
+                    break;
+                case 'openai':
+                    require_once('lib/providers/OpenAICompatibleProvider.php');
+                    $provider = new OpenAICompatibleProvider();
+                    if (!empty($apiKey)) {
+                        $provider->setApiKey($apiKey);
+                    }
+                    if (!empty($endpoint)) {
+                        $provider->setEndpoint($endpoint);
+                    }
+                    break;
+                default:
+                    echo json_encode([
+                        'success' => false,
+                        'models' => [],
+                        'message' => '该服务不支持获取模型列表（' . $service . '）'
+                    ], JSON_UNESCAPED_UNICODE);
+                    return;
+            }
+
+            $result = $provider->listModels();
+            $ok = !empty($result['ok']);
+            $models = $result['models'] ?? [];
+            $message = $result['message'] ?? ($ok ? ('共 ' . count($models) . ' 个模型') : '获取模型列表失败');
+
+            Logger::info("ListModelsAction result: ok=" . ($ok ? 'true' : 'false') . ', count=' . count($models));
+
+            echo json_encode([
+                'success' => $ok,
+                'models' => $models,
+                'message' => $message
+            ], JSON_UNESCAPED_UNICODE);
+        } catch (Exception $e) {
+            Logger::exception($e, 'List models action');
+            echo json_encode(['success' => false, 'models' => [], 'message' => $e->getMessage()], JSON_UNESCAPED_UNICODE);
         }
     }
 
