@@ -3,6 +3,8 @@
 !.htaccess
 !index.html
 !README.md
-# Third-party extension shipped with this fork (Render deployment).
+# Third-party extensions shipped with this fork (Render deployment).
 !ConfigSync/
 !ConfigSync/**
+!TranslateDigest/
+!TranslateDigest/**
