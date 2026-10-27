@@ -173,6 +173,7 @@
         'TokenMaxChars' => $conf->TokenMaxChars ?? '4000',
         'TranslateTitles' => json_decode($conf->TranslateTitles ?? '{}', true) ?: [],
         'SummarizeContents' => json_decode($conf->SummarizeContents ?? '{}', true) ?: [],
+        'TranslateContents' => json_decode($conf->TranslateContents ?? '{}', true) ?: [],
     ];
     
     // 获取验证错误信息
@@ -444,6 +445,7 @@
                     <tr>
                         <th class="feed-name">订阅源名称</th>
                         <th class="feed-controls-cell">翻译标题</th>
+                        <th class="feed-controls-cell">翻译内容</th>
                         <th class="feed-controls-cell">生成摘要</th>
                     </tr>
                 </thead>
@@ -451,6 +453,7 @@
                     <?php foreach ($feeds as $feedId => $feed):
                         $feedName = htmlspecialchars($feed->name(), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
                         $isTranslateChecked = isset($config['TranslateTitles'][$feedId]) && $config['TranslateTitles'][$feedId] === '1';
+                        $isContentChecked = isset($config['TranslateContents'][$feedId]) && $config['TranslateContents'][$feedId] === '1';
                         $isSummarizeChecked = isset($config['SummarizeContents'][$feedId]) && $config['SummarizeContents'][$feedId] === '1';
                     ?>
                     <tr>
@@ -461,6 +464,11 @@
                                 <?php echo $isTranslateChecked ? 'checked' : ''; ?>>
                         </td>
                         <td class="feed-controls-cell">
+                            <input type="checkbox" id="translate-content-feed-<?php echo $feedId; ?>" 
+                                name="TranslateContents[<?php echo $feedId; ?>]" value="1" 
+                                <?php echo $isContentChecked ? 'checked' : ''; ?>>
+                        </td>
+                        <td class="feed-controls-cell">
                             <input type="checkbox" id="summarize-feed-<?php echo $feedId; ?>" 
                                 name="SummarizeContents[<?php echo $feedId; ?>]" value="1" 
                                 <?php echo $isSummarizeChecked ? 'checked' : ''; ?>>
@@ -469,6 +477,12 @@
                     <?php endforeach; ?>
                 </tbody>
             </table>
+            <span class="help-text">
+                <strong>翻译标题</strong>：译文追加在原标题后；
+                <strong>翻译内容</strong>：在正文前插入译文块，原文完整保留（双语显示）；
+                <strong>生成摘要</strong>：在正文前插入 AI 摘要块。
+                三者可同时启用，顺序为 译文 → 摘要 → 原文。
+            </span>
             <?php endif; ?>
         </div>
     </div>

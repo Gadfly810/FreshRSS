@@ -1,7 +1,7 @@
 {
     "name": "TranslateDigest",
     "version": "0.1.0",
-    "description": "Translate titles & summarize content per feed with AI providers (Google / DeepSeek / Gemini / DeepL / OpenAI Compatible).",
+    "description": "Translate titles, translate content and summarize content per feed with AI providers (Google / DeepSeek / Gemini / DeepL / OpenAI Compatible).",
     "author": "fishyo",
     "website": "https://github.com/fishyo/TranslateDigest",
     "entrypoint": "TranslateDigest",

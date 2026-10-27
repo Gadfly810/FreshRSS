@@ -54,6 +54,103 @@ class TextUtil {
     }
 
     /**
+     * 从 HTML 中提取段落级文本块
+     * 块级标签与 <br> 当作换行，去标签、解实体、规范化空白，丢弃空行与相邻重复行
+     * @param string $html 原始 HTML
+     * @return array 文本块列表
+     */
+    public static function extractBlocks($html) {
+        $html = (string)$html;
+
+        // 去掉脚本与样式内容
+        $html = preg_replace('#<(script|style)\b[^>]*>.*?</\1>#is', ' ', $html);
+
+        // 块级标签边界与 <br> 转成换行符
+        $html = preg_replace('#<br\s*/?>#i', "\n", $html);
+        $html = preg_replace('#</(p|div|li|ul|ol|dl|dt|dd|h[1-6]|blockquote|tr|td|th|section|article|figure|figcaption|pre|table)\s*>#i', "\n", $html);
+        $html = preg_replace('#<(p|div|li|ul|ol|dl|dt|dd|h[1-6]|blockquote|tr|td|th|section|article|figure|figcaption|pre|table)\b[^>]*>#i', "\n", $html);
+
+        $text = strip_tags($html);
+        $text = html_entity_decode($text, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        $text = str_replace(["\r\n", "\r"], "\n", $text);
+
+        $blocks = [];
+        foreach (explode("\n", $text) as $line) {
+            $line = preg_replace('/\s+/u', ' ', $line);
+            $line = trim($line);
+            if ($line === '' || mb_strlen($line) < 2) {
+                continue;
+            }
+            if (!empty($blocks) && end($blocks) === $line) {
+                continue;
+            }
+            $blocks[] = $line;
+        }
+
+        return $blocks;
+    }
+
+    /**
+     * 按句末标点把长文本切成不超过 $limit 的块，用于分段翻译
+     * @param string $text 文本
+     * @param int $limit 单块最大字符数
+     * @return array 文本块列表
+     */
+    public static function splitChunks($text, $limit) {
+        $text = trim((string)$text);
+        if ($text === '') {
+            return [];
+        }
+        $limit = (int)$limit;
+        if ($limit < 50) {
+            $limit = 50;
+        }
+        if (mb_strlen($text) <= $limit) {
+            return [$text];
+        }
+
+        // 先按句末标点切句（保留标点）
+        $sentences = preg_split('/(?<=[。！？；.!?;])\s*/u', $text, -1, PREG_SPLIT_NO_EMPTY);
+        if (empty($sentences)) {
+            $sentences = [$text];
+        }
+
+        $chunks = [];
+        $current = '';
+        foreach ($sentences as $sentence) {
+            if (mb_strlen($sentence) > $limit) {
+                if ($current !== '') {
+                    $chunks[] = $current;
+                    $current = '';
+                }
+                // 单句超长：硬切
+                $len = mb_strlen($sentence);
+                for ($i = 0; $i < $len; $i += $limit) {
+                    $chunks[] = mb_substr($sentence, $i, $limit);
+                }
+                continue;
+            }
+            if ($current !== '' && mb_strlen($current) + mb_strlen($sentence) > $limit) {
+                $chunks[] = $current;
+                $current = '';
+            }
+            $current .= $sentence;
+        }
+        if (trim($current) !== '') {
+            $chunks[] = $current;
+        }
+
+        $result = [];
+        foreach ($chunks as $chunk) {
+            $chunk = trim($chunk);
+            if ($chunk !== '') {
+                $result[] = $chunk;
+            }
+        }
+        return $result;
+    }
+
+    /**
      * 安全转义HTML
      */
     public static function escapeHtml($text) {

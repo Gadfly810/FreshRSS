@@ -71,6 +71,7 @@ class TranslateDigestExtension extends Minz_Extension {
         $translateService = Minz_Request::param('TranslateDefaultService', 'google');
         $translateTitles = Minz_Request::param('TranslateTitles', []);
         $summarizeContents = Minz_Request::param('SummarizeContents', []);
+        $translateContents = Minz_Request::param('TranslateContents', []);
         $translateSkipIfSame = Minz_Request::param('TranslateSkipIfSame', 0) ? '1' : '0';
         $targetLang = Minz_Request::param('TranslateTargetLang', 'zh');
         $tokenMaxChars = Minz_Request::param('TokenMaxChars', '4000');
@@ -95,7 +96,8 @@ class TranslateDigestExtension extends Minz_Extension {
         ];
 
         Logger::info('POST params - Service: ' . $translateService . ', TargetLang: ' . $targetLang
-            . ', TranslateTitles: ' . count($translateTitles) . ', SummarizeContents: ' . count($summarizeContents));
+            . ', TranslateTitles: ' . count($translateTitles) . ', SummarizeContents: ' . count($summarizeContents)
+            . ', TranslateContents: ' . count($translateContents));
 
         // 逐个验证已填写的服务（只记录日志，不阻止保存）
         $validationErrors = [];
@@ -115,6 +117,7 @@ class TranslateDigestExtension extends Minz_Extension {
         $conf->TranslateDefaultService = $translateService;
         $conf->TranslateTitles = json_encode($translateTitles);
         $conf->SummarizeContents = json_encode($summarizeContents);
+        $conf->TranslateContents = json_encode($translateContents);
         $conf->TranslateSkipIfSame = $translateSkipIfSame;
         $conf->TranslateTargetLang = $targetLang;
         $conf->TokenMaxChars = $tokenMaxChars;
@@ -197,7 +200,7 @@ class TranslateDigestExtension extends Minz_Extension {
         $configKeys = [
             'TranslateDefaultService', 'TranslateTitles',
             'TranslateTargetLang', 'TranslateSkipIfSame',
-            'SummarizeContents', 'TokenMaxChars',
+            'SummarizeContents', 'TokenMaxChars', 'TranslateContents',
             'DeepSeekApiKey', 'DeepSeekModel',
             'GeminiApiKey', 'GeminiModel', 'GeminiEndpoint', 'DeepLApiKey', 'DeepLEndpoint',
             'OpenAIApiKey', 'OpenAIEndpoint', 'OpenAIModel',
