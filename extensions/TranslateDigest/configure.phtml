@@ -153,8 +153,6 @@
         'TranslateDefaultService' => $conf->TranslateDefaultService ?? 'google',
         'DeepSeekApiKey' => $conf->DeepSeekApiKey ?? '',
         'DeepSeekModel' => $conf->DeepSeekModel ?? 'deepseek-chat',
-        'QwenApiKey' => $conf->QwenApiKey ?? '',
-        'QwenModel' => $conf->QwenModel ?? 'qwen-plus',
         'GeminiApiKey' => $conf->GeminiApiKey ?? '',
         'GeminiModel' => $conf->GeminiModel ?? 'gemini-2.0-flash-exp',
         'DeepLApiKey' => $conf->DeepLApiKey ?? '',
@@ -199,17 +197,6 @@
                     <?php echo $config['TranslateDefaultService'] === 'deepseek' ? 'checked' : ''; ?>>
                 <label for="service-deepseek">DeepSeek 
                     <?php if (!empty($config['DeepSeekApiKey'])): ?>
-                        <span style="font-size: 12px;">✓ 已配置</span>
-                    <?php else: ?>
-                        <span style="font-size: 12px;">⚠ 未配置</span>
-                    <?php endif; ?>
-                </label>
-            </div>
-            <div class="form-group">
-                <input type="radio" id="service-qwen" name="TranslateDefaultService" value="qwen" 
-                    <?php echo $config['TranslateDefaultService'] === 'qwen' ? 'checked' : ''; ?>>
-                <label for="service-qwen">通义千问 
-                    <?php if (!empty($config['QwenApiKey'])): ?>
                         <span style="font-size: 12px;">✓ 已配置</span>
                     <?php else: ?>
                         <span style="font-size: 12px;">⚠ 未配置</span>
@@ -308,31 +295,6 @@
                 value="<?php echo htmlspecialchars($config['DeepSeekModel'] ?? 'deepseek-chat', ENT_QUOTES); ?>" 
                 placeholder="deepseek-chat">
             <span class="help-text">默认: deepseek-chat</span>
-        </div>
-    </div>
-
-    <!-- 通义千问配置 -->
-    <div class="form-group">
-        <label class="group-name" for="qwen-key">通义千问 API Key:</label>
-        <div class="group-controls">
-            <div class="api-key-group">
-                <input id="qwen-key" type="password" name="QwenApiKey" 
-                    value="<?php echo htmlspecialchars($config['QwenApiKey'] ?? '', ENT_QUOTES); ?>" 
-                    placeholder="sk-...">
-                <button type="button" class="btn btn-small" onclick="document.getElementById('qwen-key').value=''; document.getElementById('qwen-key').type='text'; setTimeout(() => document.getElementById('qwen-key').type='password', 100);">清除</button>
-                <!-- 验证按钮已移除，改用日志提示状态 -->
-            </div>
-        </div>
-    </div>
-
-
-    <div class="form-group">
-        <label class="group-name" for="qwen-model">通义千问 模型:</label>
-        <div class="group-controls">
-            <input id="qwen-model" type="text" name="QwenModel" 
-                value="<?php echo htmlspecialchars($config['QwenModel'] ?? 'qwen-plus', ENT_QUOTES); ?>" 
-                placeholder="qwen-plus">
-            <span class="help-text">默认: qwen-plus</span>
         </div>
     </div>
 
@@ -495,10 +457,6 @@
         $token_stats['deepseek'] = ['prompt' => 0, 'completion' => 0, 'total' => 0];
     }
     
-    if (!isset($token_stats['qwen'])) {
-        $token_stats['qwen'] = ['prompt' => 0, 'completion' => 0, 'total' => 0];
-    }
-
     if (!isset($token_stats['deepl'])) {
         $token_stats['deepl'] = ['prompt' => 0, 'completion' => 0, 'total' => 0];
     }

@@ -5,7 +5,6 @@ require_once(__DIR__ . '/TokenCounter.php');
 require_once(__DIR__ . '/providers/ITranslationProvider.php');
 require_once(__DIR__ . '/providers/GoogleProvider.php');
 require_once(__DIR__ . '/providers/DeepSeekProvider.php');
-require_once(__DIR__ . '/providers/QwenProvider.php');
 require_once(__DIR__ . '/providers/GeminiProvider.php');
 require_once(__DIR__ . '/providers/DeepLProvider.php');
 require_once(__DIR__ . '/providers/OpenAICompatibleProvider.php');
@@ -27,8 +26,6 @@ class SummarizationService {
         switch ($key) {
             case 'deepseek':
                 return new DeepSeekProvider();
-            case 'qwen':
-                return new QwenProvider();
             case 'gemini':
                 return new GeminiProvider();
             case 'deepl':

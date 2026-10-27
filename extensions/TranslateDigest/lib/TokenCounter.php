@@ -7,11 +7,10 @@ class TokenCounter {
     const STATS_KEY = 'TranslateTitlesCN_TokenStats';
 
     // 参与 token 统计的提供商
-    private static $knownProviders = ['google', 'deepseek', 'qwen', 'gemini', 'deepl', 'openai'];
+    private static $knownProviders = ['google', 'deepseek', 'gemini', 'deepl', 'openai'];
 
     private static $defaultStats = [
         'deepseek' => ['prompt' => 0, 'completion' => 0, 'total' => 0],
-        'qwen'  => ['prompt' => 0, 'completion' => 0, 'total' => 0],
         'gemini'  => ['prompt' => 0, 'completion' => 0, 'total' => 0],
         // DeepL 按字符计费且响应不含 token 用量，仅占位
         'deepl'   => ['prompt' => 0, 'completion' => 0, 'total' => 0],
