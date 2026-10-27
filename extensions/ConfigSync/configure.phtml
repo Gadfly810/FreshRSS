@@ -1,0 +1,98 @@
+<?php
+declare(strict_types=1);
+/** @var ConfigSyncExtension $this */
+$status = $this->getStatus();
+?>
+
+<fieldset class="group">
+	<legend>ConfigSync</legend>
+
+	<div class="form-group">
+		<label class="group-name">Backend</label>
+		<div class="group-controls">
+			<p class="help">
+				<?= htmlspecialchars($status['backend'], ENT_COMPAT, 'UTF-8') ?>
+				&rarr; <?= htmlspecialchars($status['target'], ENT_COMPAT, 'UTF-8') ?>
+			</p>
+			<?php if ($status['problem'] !== '') { ?>
+			<p class="alert alert-warn">
+				<?= htmlspecialchars($status['problem'], ENT_COMPAT, 'UTF-8') ?>
+			</p>
+			<?php } ?>
+			<?php if ($status['insecure'] === 'yes') { ?>
+			<p class="alert alert-warn">
+				The WebDAV URL does not use HTTPS: the Basic credentials would travel in clear text.
+			</p>
+			<?php } ?>
+			<?php if ($status['backend'] === 'gist') { ?>
+			<p class="help">
+				The gist must already exist (a <em>secret</em> gist is enough); put its id
+				in <code>ConfigSyncGistId</code>. The file inside it is
+				<code>freshrss-configsync.json</code> and is created on the first push.
+			</p>
+			<?php } ?>
+				<code>ConfigSyncBackend</code>, <code>ConfigSyncGistToken</code>,
+				<code>ConfigSyncGistId</code>, <code>ConfigSyncWebDavUrl</code>,
+				<code>ConfigSyncWebDavUser</code>, <code>ConfigSyncWebDavPass</code>,
+				<code>ConfigSyncPassphrase</code>.
+			</p>
+		</div>
+	</div>
+
+	<div class="form-group">
+		<label class="group-name">Gist ID</label>
+		<div class="group-controls">
+			<p class="help">
+				<?= $status['gistId'] !== '' ? htmlspecialchars($status['gistId'], ENT_COMPAT, 'UTF-8') : '<em>not set</em>' ?>
+			</p>
+		</div>
+	</div>
+
+	<div class="form-group">
+		<label class="group-name">Credentials</label>
+		<div class="group-controls">
+			<p class="help">
+				token: <strong><?= $status['hasToken'] ?></strong> &middot;
+				passphrase: <strong><?= $status['hasPassphrase'] ?></strong>
+			</p>
+		</div>
+	</div>
+
+	<div class="form-group">
+		<label class="group-name">Last sync</label>
+		<div class="group-controls">
+			<p class="help">
+				push: <?= $status['lastPush'] !== '' ? htmlspecialchars($status['lastPush'], ENT_COMPAT, 'UTF-8') : '<em>never</em>' ?><br />
+				pull: <?= $status['lastPull'] !== '' ? htmlspecialchars($status['lastPull'], ENT_COMPAT, 'UTF-8') : '<em>never</em>' ?>
+			</p>
+		</div>
+	</div>
+</fieldset>
+
+<form action="<?= _url('configsync', 'push') ?>" method="post">
+	<input type="hidden" name="_csrf" value="<?= FreshRSS_Auth::csrfToken() ?>" />
+	<div class="form-group form-actions">
+		<div class="group-controls">
+			<button type="submit" class="btn btn-important">Force push</button>
+		</div>
+	</div>
+</form>
+
+<form action="<?= _url('configsync', 'pull') ?>" method="post">
+	<input type="hidden" name="_csrf" value="<?= FreshRSS_Auth::csrfToken() ?>" />
+	<div class="form-group form-actions">
+		<div class="group-controls">
+			<button type="submit" class="btn">Force pull</button>
+		</div>
+	</div>
+</form>
+
+<p class="help">
+	<b>Push</b> reads the whole user configuration, encrypts it with
+	<code>ConfigSyncPassphrase</code> (AES-256-GCM, PBKDF2-SHA256, 100000 iterations)
+	and uploads it to the configured store.<br />
+	<b>Pull</b> downloads it, decrypts it and writes every key back into the user
+	configuration one by one, then saves. Keys that exist locally but are missing
+	from the snapshot keep their current value. Storage credentials and the
+	passphrase always keep their local value.
+</p>

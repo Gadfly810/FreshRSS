@@ -1,0 +1,9 @@
+{
+  "name": "ConfigSync",
+  "author": "gadfly",
+  "description": "Export the whole user configuration to an encrypted snapshot and restore it on a fresh container.",
+  "version": "0.1.0",
+  "entrypoint": "ConfigSync",
+  "type": "user",
+  "compatibility": "1.30.4"
+}
