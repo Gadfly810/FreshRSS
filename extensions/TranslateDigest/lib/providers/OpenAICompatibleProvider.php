@@ -97,6 +97,56 @@ class OpenAICompatibleProvider extends AbstractProvider {
         return true;
     }
 
+    public function supportsBatch() {
+        return true;
+    }
+
+    /**
+     * 批量翻译：所有段落打包成一次请求（结构化 JSON 协议）
+     */
+    public function translateBatch(array $texts, $sourceLang = 'auto', $targetLang = 'zh') {
+        if ($this->model === '' || empty($texts)) {
+            return array_fill_keys(array_keys($texts), '');
+        }
+
+        $segments = [];
+        $keys = [];
+        $id = 0;
+        foreach ($texts as $key => $text) {
+            $text = trim((string)$text);
+            if ($text === '') {
+                continue;
+            }
+            $id++;
+            $segments[] = ['id' => $id, 'text' => $text];
+            $keys[$id] = $key;
+        }
+        if (empty($segments)) {
+            return array_fill_keys(array_keys($texts), '');
+        }
+
+        $payload = $this->buildPayload($this->buildBatchMessages($segments, $targetLang), 'translate');
+
+        $data = $this->makeRequest($payload, 60);
+        if ($data === null) {
+            return array_fill_keys(array_keys($texts), '');
+        }
+
+        $parsed = $this->parseBatchResponse($this->extractMessage($data));
+        $results = array_fill_keys(array_keys($texts), '');
+        if ($parsed === null) {
+            Logger::error($this->getName() . ' batch response parse failed, falling back to per-segment');
+            return $results;
+        }
+
+        foreach ($keys as $segmentId => $key) {
+            if (isset($parsed[$segmentId])) {
+                $results[$key] = $this->postProcessOutput($parsed[$segmentId]);
+            }
+        }
+        return $results;
+    }
+
     public function summarize($text, $targetLang = 'zh', $maxChars = 200) {
         $clean = $this->prepareText($text, $maxChars * 5);
         if (empty($clean)) {

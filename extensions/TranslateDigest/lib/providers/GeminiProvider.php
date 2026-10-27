@@ -110,6 +110,65 @@ class GeminiProvider extends AbstractProvider {
         return true;
     }
 
+    public function supportsBatch() {
+        return true;
+    }
+
+    /**
+     * 批量翻译：所有段落打包成一次请求（结构化 JSON 协议）
+     * Gemini 只用单条 prompt，因此用 buildBatchPrompt()
+     */
+    public function translateBatch(array $texts, $sourceLang = 'auto', $targetLang = 'zh') {
+        if (empty($this->apiKey) || $this->model === '' || empty($texts)) {
+            return array_fill_keys(array_keys($texts), '');
+        }
+
+        $segments = [];
+        $keys = [];
+        $id = 0;
+        foreach ($texts as $key => $text) {
+            $text = trim((string)$text);
+            if ($text === '') {
+                continue;
+            }
+            $id++;
+            $segments[] = ['id' => $id, 'text' => $text];
+            $keys[$id] = $key;
+        }
+        if (empty($segments)) {
+            return array_fill_keys(array_keys($texts), '');
+        }
+
+        $payload = [
+            'contents' => [
+                ['parts' => [['text' => $this->buildBatchPrompt($segments, $targetLang)]]]
+            ],
+            'generationConfig' => [
+                'temperature' => self::$payloadDefaults['translate']['temperature'],
+                'maxOutputTokens' => 8192
+            ]
+        ];
+
+        $data = $this->makeRequest($payload, 60);
+        if ($data === null) {
+            return array_fill_keys(array_keys($texts), '');
+        }
+
+        $parsed = $this->parseBatchResponse($this->extractMessage($data));
+        $results = array_fill_keys(array_keys($texts), '');
+        if ($parsed === null) {
+            Logger::error($this->getName() . ' batch response parse failed, falling back to per-segment');
+            return $results;
+        }
+
+        foreach ($keys as $segmentId => $key) {
+            if (isset($parsed[$segmentId])) {
+                $results[$key] = $this->postProcessOutput($parsed[$segmentId]);
+            }
+        }
+        return $results;
+    }
+
     public function summarize($text, $targetLang = 'zh', $maxChars = 200) {
         if (empty($this->apiKey)) {
             return mb_substr($text, 0, $maxChars);

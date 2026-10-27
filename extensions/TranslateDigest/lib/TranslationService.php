@@ -5,6 +5,11 @@ require_once(__DIR__ . '/providers/ProviderFactory.php');
 
 class TranslationService {
 
+    /** 单次批量请求的最大段数 */
+    const BATCH_MAX_SEGMENTS = 20;
+    /** 单次批量请求的最大字符数 */
+    const BATCH_MAX_CHARS = 10000;
+
     private $provider;
     private $targetLang;
     private static $cache = [];
@@ -80,5 +85,106 @@ class TranslationService {
         $result = $fallback->translate($text, 'auto', $this->targetLang) ?: $text;
         Logger::info('Translation fallback - Service: GOOGLE | Result: ' . mb_substr($result, 0, 50));
         return $result;
+    }
+
+    /**
+     * 批量翻译
+     * 先查内存缓存，剩余文本按段数/字符数分组，每组一次请求；
+     * 组内失败项回落 Google，仍失败则返回原文
+     * @param array $texts 待翻译文本（下标任意）
+     * @return array 与 $texts 同下标的译文数组
+     */
+    public function translateBatch(array $texts) {
+        if (empty($texts)) {
+            return [];
+        }
+
+        $serviceName = $this->provider->getName();
+        $results = [];
+        $pending = [];
+
+        foreach ($texts as $key => $text) {
+            $text = trim((string)$text);
+            if ($text === '') {
+                $results[$key] = '';
+                continue;
+            }
+            $cacheKey = md5('translate|' . $serviceName . '|' . $this->targetLang . '|' . $text);
+            if (isset(self::$cache[$cacheKey])) {
+                $results[$key] = self::$cache[$cacheKey];
+                continue;
+            }
+            $pending[$key] = ['text' => $text, 'cache' => $cacheKey];
+        }
+
+        if (empty($pending)) {
+            Logger::debug('Batch translation - Service: ' . strtoupper($serviceName) . ' | Cache: ALL MEMORY HIT | Segments: ' . count($texts));
+            return $results;
+        }
+
+        Logger::info('Batch translation start - Service: ' . strtoupper($serviceName)
+            . ' | Target: ' . $this->targetLang
+            . ' | Segments: ' . count($pending)
+            . ' | Batch support: ' . ($this->provider->supportsBatch() ? 'YES' : 'NO'));
+
+        $batches = $this->groupIntoBatches($pending);
+
+        foreach ($batches as $batch) {
+            $batchTexts = [];
+            foreach ($batch as $key => $item) {
+                $batchTexts[$key] = $item['text'];
+            }
+
+            $translated = $this->callProviderBatch($batchTexts);
+
+            foreach ($batch as $key => $item) {
+                $result = $translated[$key] ?? '';
+                if (trim((string)$result) === '') {
+                    $result = $this->fallbackToGoogle($item['text']);
+                }
+                self::$cache[$item['cache']] = $result;
+                $results[$key] = $result;
+            }
+        }
+
+        Logger::info('Batch translation done - Service: ' . strtoupper($serviceName) . ' | Segments: ' . count($pending));
+        return $results;
+    }
+
+    /**
+     * 调用提供商的批量翻译，异常时返回空数组
+     */
+    private function callProviderBatch(array $batchTexts) {
+        try {
+            return $this->provider->translateBatch($batchTexts, 'auto', $this->targetLang) ?: [];
+        } catch (Throwable $e) {
+            Logger::exception($e, 'Batch translation with ' . strtoupper($this->provider->getName()));
+            return [];
+        }
+    }
+
+    /**
+     * 按段数与字符数上限把待翻译文本分组
+     */
+    private function groupIntoBatches(array $pending) {
+        $batches = [];
+        $current = [];
+        $currentChars = 0;
+
+        foreach ($pending as $key => $item) {
+            $length = mb_strlen($item['text']);
+            if (!empty($current) && (count($current) >= self::BATCH_MAX_SEGMENTS || $currentChars + $length > self::BATCH_MAX_CHARS)) {
+                $batches[] = $current;
+                $current = [];
+                $currentChars = 0;
+            }
+            $current[$key] = $item;
+            $currentChars += $length;
+        }
+
+        if (!empty($current)) {
+            $batches[] = $current;
+        }
+        return $batches;
     }
 }

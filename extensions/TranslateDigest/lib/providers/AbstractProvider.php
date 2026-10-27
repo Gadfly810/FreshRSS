@@ -16,6 +16,7 @@ abstract class AbstractProvider implements ITranslationProvider {
     // Prompt 模板
     protected static $prompts = [
         'translate' => 'You are a professional translation engine. Output ONLY the translated text without explanation.',
+        'batch' => 'Act as a professional machine translation engine. Output a raw JSON array strictly. No Markdown fences, no conversational filler.',
         'summarize' => 'Summarize the article, and provide three parts: summary, abstract, and opinions. The opinion section should be listed as a list, using Markdown to reply.'
     ];
 
@@ -179,6 +180,120 @@ abstract class AbstractProvider implements ITranslationProvider {
             ['role' => 'system', 'content' => self::$prompts['translate']],
             ['role' => 'user', 'content' => 'Translate into ' . $targetLang . ': ' . $text]
         ];
+    }
+
+    /**
+     * 是否支持一次请求翻译多段文本
+     * 默认不支持，translateBatch() 会逐段调用 translate()
+     */
+    public function supportsBatch() {
+        return false;
+    }
+
+    /**
+     * 批量翻译默认实现：逐段调用 translate()
+     * @param array $texts 待翻译文本（保持原下标）
+     * @return array 与 $texts 同下标的译文数组
+     */
+    public function translateBatch(array $texts, $sourceLang = 'auto', $targetLang = 'zh') {
+        $results = [];
+        foreach ($texts as $key => $text) {
+            $results[$key] = $this->translate($text, $sourceLang, $targetLang);
+        }
+        return $results;
+    }
+
+    /**
+     * 构造批量翻译的消息列表（结构化 JSON 协议）
+     * 输入 [{"id":1,"text":"..."}]，要求模型输出同结构的译文数组
+     * @param array $segments 形如 [['id' => 1, 'text' => '...'], ...]
+     * @param string $targetLang 目标语言
+     * @return array 消息列表
+     */
+    protected function buildBatchMessages(array $segments, $targetLang) {
+        return [
+            ['role' => 'system', 'content' => self::$prompts['batch']],
+            ['role' => 'user', 'content' => $this->buildBatchInstruction($segments, $targetLang)]
+        ];
+    }
+
+    /**
+     * 构造批量翻译的单段 prompt（供 Gemini 这类只用单条文本的提供商使用）
+     */
+    protected function buildBatchPrompt(array $segments, $targetLang) {
+        return self::$prompts['batch'] . "\n\n" . $this->buildBatchInstruction($segments, $targetLang);
+    }
+
+    /**
+     * 批量翻译的指令正文
+     */
+    private function buildBatchInstruction(array $segments, $targetLang) {
+        return 'Translate the "text" field of each object in the JSON array below into ' . $targetLang . ".\n"
+            . "Rules:\n"
+            . "1. Keep the \"id\" field and the array order unchanged.\n"
+            . "2. Preserve all HTML-like tags, entities and placeholders exactly as they appear.\n"
+            . "3. Do not translate text inside <code>, <pre>, backticks, or placeholders like {1} or [[1]].\n"
+            . "4. If a text is already in the target language, return it unchanged.\n"
+            . "5. On any error, return [].\n"
+            . "Input: " . json_encode($segments, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)
+            . "\nOutput: ";
+    }
+
+    /**
+     * 解析批量翻译响应，容忍 Markdown 围栏与前后废话
+     * @param string $content 模型原始输出
+     * @return array|null 以 id 为键的译文数组；无法解析时返回 null
+     */
+    protected function parseBatchResponse($content) {
+        $content = trim((string)$content);
+        if ($content === '') {
+            return null;
+        }
+
+        // 去掉 Markdown 代码围栏
+        $content = preg_replace('/^```[a-zA-Z]*\s*/', '', $content);
+        $content = preg_replace('/\s*```\s*$/', '', $content);
+
+        // 截取首个 [ / { 到最后一个 ] / }
+        $start = strpos($content, '[');
+        $startObj = strpos($content, '{');
+        if ($start === false || ($startObj !== false && $startObj < $start)) {
+            $start = $startObj;
+        }
+        $end = max((int)strrpos($content, ']'), (int)strrpos($content, '}'));
+        if ($start === false || $end === false || $end <= $start) {
+            return null;
+        }
+
+        $json = substr($content, $start, $end - $start + 1);
+        $decoded = json_decode($json, true);
+        if (!is_array($decoded)) {
+            Logger::error($this->getName() . ' batch response is not valid JSON: ' . substr($json, 0, 200));
+            return null;
+        }
+
+        // 兼容 {"translations": [...]} 包装
+        if (isset($decoded['translations']) && is_array($decoded['translations'])) {
+            $decoded = $decoded['translations'];
+        }
+
+        $result = [];
+        foreach ($decoded as $item) {
+            if (!is_array($item)) {
+                continue;
+            }
+            $id = $item['id'] ?? null;
+            if ($id === null) {
+                continue;
+            }
+            $text = $item['text'] ?? ($item['translation'] ?? null);
+            if ($text === null) {
+                continue;
+            }
+            $result[(int)$id] = (string)$text;
+        }
+
+        return empty($result) ? null : $result;
     }
 
     /**

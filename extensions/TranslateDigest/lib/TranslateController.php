@@ -182,31 +182,53 @@ class TranslateController {
 
             Logger::debug("Translating content for feed $feedId (service: $serviceKey, lang: $targetLang, maxChars: $maxChars, blocks: " . count($blocks) . ')');
 
-            $translationService = new TranslationService($serviceKey, $targetLang);
-            $translatedBlocks = [];
-            $translatedCount = 0;
-
-            foreach ($blocks as $block) {
+            // 先把所有待翻译的 chunk 收集起来，统一批量翻译（一次请求多段）
+            $blockChunks = [];   // blockIndex => chunkIndex[]
+            $pending = [];       // "blockIndex:chunkIndex" => 原文
+            foreach ($blocks as $blockIndex => $block) {
                 // 已是目标语言则原样保留
                 if ($skipIfSame && $this->isTargetLang($block, $targetLang)) {
+                    $blockChunks[$blockIndex] = null;
+                    continue;
+                }
+                $chunks = TextUtil::splitChunks($block, $maxChars);
+                if (empty($chunks)) {
+                    $blockChunks[$blockIndex] = [];
+                    continue;
+                }
+                $blockChunks[$blockIndex] = $chunks;
+                foreach ($chunks as $chunkIndex => $chunk) {
+                    $pending[$blockIndex . ':' . $chunkIndex] = $chunk;
+                }
+            }
+
+            $translatedChunks = [];
+            if (!empty($pending)) {
+                $translationService = new TranslationService($serviceKey, $targetLang);
+                try {
+                    $translatedChunks = $translationService->translateBatch($pending);
+                } catch (Exception $e) {
+                    Logger::exception($e, 'Content batch translation');
+                    $translatedChunks = [];
+                }
+            }
+
+            $translatedBlocks = [];
+            $translatedCount = 0;
+            foreach ($blocks as $blockIndex => $block) {
+                // 已是目标语言，原样保留
+                if (isset($blockChunks[$blockIndex]) && $blockChunks[$blockIndex] === null) {
                     $translatedBlocks[] = $block;
                     continue;
                 }
-
-                $chunks = TextUtil::splitChunks($block, $maxChars);
-                $translatedChunks = [];
-                foreach ($chunks as $chunk) {
-                    try {
-                        $translated = $translationService->translate($chunk);
-                    } catch (Exception $e) {
-                        Logger::exception($e, 'Content chunk translation');
-                        $translated = null;
-                    }
+                $chunks = $blockChunks[$blockIndex] ?? [];
+                $parts = [];
+                foreach ($chunks as $chunkIndex => $chunk) {
+                    $key = $blockIndex . ':' . $chunkIndex;
                     // 翻译失败或返回空时保留原文，避免丢内容
-                    $translatedChunks[] = empty($translated) ? $chunk : $translated;
+                    $parts[] = empty($translatedChunks[$key]) ? $chunk : $translatedChunks[$key];
                 }
-
-                $translatedBlock = trim(implode(' ', $translatedChunks));
+                $translatedBlock = trim(implode(' ', $parts));
                 if ($translatedBlock !== '') {
                     $translatedBlocks[] = $translatedBlock;
                     $translatedCount++;

@@ -118,6 +118,65 @@ class DeepLProvider extends AbstractProvider {
         return '';
     }
 
+    public function supportsBatch() {
+        return true;
+    }
+
+    /**
+     * 批量翻译
+     * 官方 /v2/translate 原生支持 text 数组，一次请求返回多个译文；
+     * 旧版 DeepLX 只收单段文本，降级为逐段调用
+     */
+    public function translateBatch(array $texts, $sourceLang = 'auto', $targetLang = 'zh') {
+        if (empty($texts)) {
+            return [];
+        }
+
+        if ($this->isLegacyDeepLX()) {
+            return parent::translateBatch($texts, $sourceLang, $targetLang);
+        }
+
+        return $this->translateBatchNative($texts, $this->mapLang($targetLang, true), $this->mapLang($sourceLang, false));
+    }
+
+    /**
+     * 官方 DeepL API 的原生批量（text 为数组，译文按顺序返回）
+     */
+    private function translateBatchNative(array $texts, $target, $src) {
+        $orderedKeys = array_keys($texts);
+        $payloadTexts = [];
+        foreach ($orderedKeys as $key) {
+            $payloadTexts[] = trim((string)$texts[$key]);
+        }
+        if (empty($payloadTexts)) {
+            return array_fill_keys($orderedKeys, '');
+        }
+
+        $payload = [
+            'text' => $payloadTexts,
+            'target_lang' => $target
+        ];
+        if ($src !== '') {
+            $payload['source_lang'] = $src;
+        }
+
+        $data = $this->makeRequest($payload, 60);
+        $results = array_fill_keys($orderedKeys, '');
+        if ($data === null || empty($data['translations']) || !is_array($data['translations'])) {
+            Logger::error($this->getName() . ' native batch response has no translations');
+            return $results;
+        }
+
+        $i = 0;
+        foreach ($orderedKeys as $key) {
+            if (isset($data['translations'][$i]['text'])) {
+                $results[$key] = $this->postProcessOutput($data['translations'][$i]['text']);
+            }
+            $i++;
+        }
+        return $results;
+    }
+
     /**
      * DeepL 的错误响应使用 {"message": "..."} / {"code": 456} 格式（非 error.message）
      */
