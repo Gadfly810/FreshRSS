@@ -4,32 +4,35 @@ require_once('lib/TextUtil.php');
 require_once('lib/TranslateController.php');
 require_once('lib/TranslationService.php');
 require_once('lib/SummarizationService.php');
-require_once('lib/TokenCounter.php');
+require_once('lib/providers/ProviderFactory.php');
 
 class TranslateDigestExtension extends Minz_Extension {
 
+    /** 需要验证的服务：服务键 => [显示名, 是否需要 endpoint, 是否需要 model] */
+    private static $providersToValidate = [
+        'deepseek' => ['DeepSeek', false, true],
+        'gemini'   => ['Gemini', true, true],
+        'deepl'    => ['DeepL', true, false],
+        'openai'   => ['OpenAI 兼容', true, true],
+    ];
+
     public function init() {
         Logger::info('Plugin initializing...');
-        
+
         if (!extension_loaded('mbstring')) {
             Logger::error('Plugin requires PHP mbstring extension');
         }
-        
+
         // 处理 CLI 模式下的用户上下文
         if (php_sapi_name() === 'cli' && !FreshRSS_Context::$user_conf) {
             $this->initializeCliContext();
         }
-        
-        // 注册钩子
-        $this->registerHook('feed_before_insert', [$this, 'addTranslationOption']);
+
         $this->registerHook('entry_before_insert', [$this, 'handleEntry']);
 
-        // 日志输出当前配置用于调试（直接从 user_conf 读取）
-        $defaultService = strtoupper(FreshRSS_Context::$user_conf->TranslateDefaultService ?? 'GOOGLE');
+        $defaultService = strtoupper(FreshRSS_Context::$user_conf->TranslateDefaultService ?? 'google');
         $targetLang = FreshRSS_Context::$user_conf->TranslateTargetLang ?? 'zh';
         Logger::info('Plugin configuration - Service: ' . $defaultService . ' | Target Language: ' . $targetLang);
-        
-        Logger::info('Initialization complete');
     }
 
     /**
@@ -46,284 +49,176 @@ class TranslateDigestExtension extends Minz_Extension {
     }
 
     public function handleConfigureAction() {
-        // 优先处理 Token 重置请求 (GET)
-        if (Minz_Request::param('_action') === 'reset_tokens' && FreshRSS_Auth::checkCsrf(Minz_Request::param('_csrf'))) {
-            $provider = Minz_Request::param('provider');
-            if ($provider === 'deepseek') {
-                TokenCounter::resetTotalTokens($provider);
-                
-                // 重定向回配置页面
-                $redirect_url = _url('extension', 'configure', 'e', 'TranslateDigest');
-                header('Location: ' . $redirect_url);
-                exit();
-            }
-        }
-
         if (Minz_Request::param('_action') === 'list_models') {
             $this->handleListModelsAction();
             return;
         }
 
         if (Minz_Request::isPost()) {
-            Logger::info('Configure action: POST request received');
-
-            $translateService = Minz_Request::param('TranslateDefaultService', 'google');
-            $translateTitles = Minz_Request::param('TranslateTitles', []);
-            $summarizeContents = Minz_Request::param('SummarizeContents', []);
-            $translateSkipIfSame = Minz_Request::param('TranslateSkipIfSame', 0) ? '1' : '0';
-            $targetLang = Minz_Request::param('TranslateTargetLang', 'zh');
-            $deepseekKey = Minz_Request::param('DeepSeekApiKey', '');
-            $deepseekMasked = empty($deepseekKey) ? '' : (substr($deepseekKey, 0, 4) . '...' . substr($deepseekKey, -4));
-            $deepseekModel = trim(Minz_Request::param('DeepSeekModel', ''));
-            $geminiKey = Minz_Request::param('GeminiApiKey', '');
-            $geminiMasked = empty($geminiKey) ? '' : (substr($geminiKey, 0, 4) . '...' . substr($geminiKey, -4));
-            $geminiModel = trim(Minz_Request::param('GeminiModel', ''));
-            $geminiEndpoint = trim(Minz_Request::param('GeminiEndpoint', ''));
-            $deeplKey = Minz_Request::param('DeepLApiKey', '');
-            $deeplMasked = empty($deeplKey) ? '' : (substr($deeplKey, 0, 4) . '...' . substr($deeplKey, -4));
-            $deeplEndpoint = Minz_Request::param('DeepLEndpoint', '');
-            $openaiKey = Minz_Request::param('OpenAIApiKey', '');
-            $openaiMasked = empty($openaiKey) ? '' : (substr($openaiKey, 0, 4) . '...' . substr($openaiKey, -4));
-            $openaiEndpoint = trim(Minz_Request::param('OpenAIEndpoint', ''));
-            $openaiModel = trim(Minz_Request::param('OpenAIModel', ''));
-            $tokenMaxChars = Minz_Request::param('TokenMaxChars', '4000');
-            $summarizeContent = Minz_Request::param('SummarizeContent', 0) ? '1' : '0';
-            $maxSummaryChars = Minz_Request::param('MaxSummaryChars', '200');
-
-            // 用于存储验证错误信息
-            $validationErrors = [];
-            
-            // 日志记录接收到的参数
-            Logger::info('POST params - Service: ' . $translateService . ', TargetLang: ' . $targetLang);
-            Logger::info('TranslateTitles count: ' . count($translateTitles) . ', SummarizeContents count: ' . count($summarizeContents));
-            
-            // DeepSeek Key 验证（只记录日志，不阻止保存）
-            if (!empty($deepseekKey)) {
-                require_once('lib/providers/DeepSeekProvider.php');
-                try {
-                    $provider = new DeepSeekProvider();
-                    $provider->setApiKey($deepseekKey);
-                    if (!empty($deepseekModel)) {
-                        $provider->setModel($deepseekModel);
-                    }
-                    $result = $provider->validateKey();
-                    if (!$result['ok']) {
-                        $errorMsg = 'DeepSeek API Key 验证失败: ' . $result['message'];
-                        Logger::warning($errorMsg);
-                        $validationErrors['deepseek'] = $errorMsg;
-                        Logger::info('DeepSeek key validation: ✗ INVALID - ' . $result['message']);
-                    } else {
-                        Logger::info('DeepSeek key validation: ✓ VALID');
-                    }
-                } catch (Exception $e) {
-                    $errorMsg = 'DeepSeek API Key 验证异常: ' . $e->getMessage();
-                    Logger::warning($errorMsg);
-                    $validationErrors['deepseek'] = $errorMsg;
-                    Logger::info('DeepSeek key validation: ✗ ERROR - ' . $e->getMessage());
-                }
-            } else {
-                Logger::info('DeepSeek key validation: SKIPPED (empty)');
-            }
-
-
-            // Gemini Key 验证（只记录日志，不阻止保存）
-            if (!empty($geminiKey)) {
-                require_once('lib/providers/GeminiProvider.php');
-                try {
-                    $provider = new GeminiProvider();
-                    $provider->setApiKey($geminiKey);
-                    if (!empty($geminiEndpoint)) {
-                        $provider->setEndpoint($geminiEndpoint);
-                    }
-                    if (!empty($geminiModel)) {
-                        $provider->setModel($geminiModel);
-                    }
-                    $result = $provider->validateKey();
-                    if (!$result['ok']) {
-                        $errorMsg = 'Gemini API Key 验证失败: ' . $result['message'];
-                        Logger::warning($errorMsg);
-                        $validationErrors['gemini'] = $errorMsg;
-                        Logger::info('Gemini key validation: ✗ INVALID - ' . $result['message']);
-                    } else {
-                        Logger::info('Gemini key validation: ✓ VALID');
-                    }
-                } catch (Exception $e) {
-                    $errorMsg = 'Gemini API Key 验证异常: ' . $e->getMessage();
-                    Logger::warning($errorMsg);
-                    $validationErrors['gemini'] = $errorMsg;
-                    Logger::info('Gemini key validation: ✗ ERROR - ' . $e->getMessage());
-                }
-            } else {
-                Logger::info('Gemini key validation: SKIPPED (empty)');
-            }
-
-            // DeepL / DeepLX 验证（只记录日志，不阻止保存）
-            if (!empty($deeplKey) || !empty($deeplEndpoint)) {
-                require_once('lib/providers/DeepLProvider.php');
-                try {
-                    $provider = new DeepLProvider();
-                    if (!empty($deeplKey)) {
-                        $provider->setApiKey($deeplKey);
-                    }
-                    if (!empty($deeplEndpoint)) {
-                        $provider->setEndpoint($deeplEndpoint);
-                    }
-                    $result = $provider->validateKey();
-                    if (!$result['ok']) {
-                        $errorMsg = 'DeepL 验证失败: ' . $result['message'];
-                        Logger::warning($errorMsg);
-                        $validationErrors['deepl'] = $errorMsg;
-                        Logger::info('DeepL validation: ✗ INVALID - ' . $result['message']);
-                    } else {
-                        Logger::info('DeepL validation: ✓ VALID');
-                    }
-                } catch (Exception $e) {
-                    $errorMsg = 'DeepL 验证异常: ' . $e->getMessage();
-                    Logger::warning($errorMsg);
-                    $validationErrors['deepl'] = $errorMsg;
-                    Logger::info('DeepL validation: ✗ ERROR - ' . $e->getMessage());
-                }
-            } else {
-                Logger::info('DeepL validation: SKIPPED (empty)');
-            }
-
-            // OpenAI 兼容服务验证（只记录日志，不阻止保存）
-            if (!empty($openaiKey) || !empty($openaiEndpoint)) {
-                require_once('lib/providers/OpenAICompatibleProvider.php');
-                try {
-                    $provider = new OpenAICompatibleProvider();
-                    if (!empty($openaiKey)) {
-                        $provider->setApiKey($openaiKey);
-                    }
-                    if (!empty($openaiEndpoint)) {
-                        $provider->setEndpoint($openaiEndpoint);
-                    }
-                    if (!empty($openaiModel)) {
-                        $provider->setModel($openaiModel);
-                    }
-                    $result = $provider->validateKey();
-                    if (!$result['ok']) {
-                        $errorMsg = 'OpenAI 兼容服务验证失败: ' . $result['message'];
-                        Logger::warning($errorMsg);
-                        $validationErrors['openai'] = $errorMsg;
-                        Logger::info('OpenAI validation: ✗ INVALID - ' . $result['message']);
-                    } else {
-                        Logger::info('OpenAI validation: ✓ VALID');
-                    }
-                } catch (Exception $e) {
-                    $errorMsg = 'OpenAI 兼容服务验证异常: ' . $e->getMessage();
-                    Logger::warning($errorMsg);
-                    $validationErrors['openai'] = $errorMsg;
-                    Logger::info('OpenAI validation: ✗ ERROR - ' . $e->getMessage());
-                }
-            } else {
-                Logger::info('OpenAI validation: SKIPPED (empty)');
-            }
-            
-            // 将验证错误信息存储到视图中
-            $this->view['validationErrors'] = $validationErrors;
-
-            // 设置所有配置参数
-            FreshRSS_Context::$user_conf->TranslateDefaultService = $translateService;
-            FreshRSS_Context::$user_conf->TranslateTitles = json_encode($translateTitles);
-            FreshRSS_Context::$user_conf->SummarizeContents = json_encode($summarizeContents);
-            FreshRSS_Context::$user_conf->TranslateSkipIfSame = $translateSkipIfSame;
-            FreshRSS_Context::$user_conf->TranslateTargetLang = $targetLang;
-            FreshRSS_Context::$user_conf->DeepSeekApiKey = $deepseekKey;
-            FreshRSS_Context::$user_conf->DeepSeekModel = $deepseekModel;
-            FreshRSS_Context::$user_conf->GeminiApiKey = $geminiKey;
-            FreshRSS_Context::$user_conf->GeminiModel = $geminiModel;
-            FreshRSS_Context::$user_conf->GeminiEndpoint = $geminiEndpoint;
-            FreshRSS_Context::$user_conf->DeepLApiKey = $deeplKey;
-            FreshRSS_Context::$user_conf->DeepLEndpoint = $deeplEndpoint;
-            FreshRSS_Context::$user_conf->OpenAIApiKey = $openaiKey;
-            FreshRSS_Context::$user_conf->OpenAIEndpoint = $openaiEndpoint;
-            FreshRSS_Context::$user_conf->OpenAIModel = $openaiModel;
-            FreshRSS_Context::$user_conf->TokenMaxChars = $tokenMaxChars;
-            FreshRSS_Context::$user_conf->SummarizeContent = $summarizeContent;
-            FreshRSS_Context::$user_conf->MaxSummaryChars = $maxSummaryChars;
-
-            Logger::info('Set config values - Service: ' . $translateService . ', TargetLang: ' . $targetLang);
-            Logger::info('Keys saved - DeepSeek: ' . (empty($deepseekKey) ? 'EMPTY' : 'SET (' . $deepseekMasked . ')'));
-            Logger::info('Keys saved - Gemini: ' . (empty($geminiKey) ? 'EMPTY' : 'SET (' . $geminiMasked . ')'));
-            Logger::info('Keys saved - DeepL: ' . (empty($deeplKey) ? 'EMPTY' : 'SET (' . $deeplMasked . ')') . ' | Endpoint: ' . (empty($deeplEndpoint) ? 'AUTO' : $deeplEndpoint));
-            Logger::info('Keys saved - OpenAI: ' . (empty($openaiKey) ? 'EMPTY' : 'SET (' . $openaiMasked . ')') . ' | Endpoint: ' . (empty($openaiEndpoint) ? 'DEFAULT' : $openaiEndpoint) . ' | Model: ' . (empty($openaiModel) ? 'DEFAULT' : $openaiModel));
-            
-            // 总结验证结果
-            Logger::info('=== Configuration Save Summary ===');
-            Logger::info('DeepSeek: ' . (isset($validationErrors['deepseek']) ? '✗ ' . $validationErrors['deepseek'] : (empty($deepseekKey) ? 'EMPTY' : '✓ VALID')));
-            Logger::info('Gemini: ' . (isset($validationErrors['gemini']) ? '✗ ' . $validationErrors['gemini'] : (empty($geminiKey) ? 'EMPTY' : '✓ VALID')));
-            Logger::info('DeepL: ' . (isset($validationErrors['deepl']) ? '✗ ' . $validationErrors['deepl'] : ((empty($deeplKey) && empty($deeplEndpoint)) ? 'EMPTY' : '✓ VALID')));
-            Logger::info('OpenAI: ' . (isset($validationErrors['openai']) ? '✗ ' . $validationErrors['openai'] : ((empty($openaiKey) && empty($openaiEndpoint)) ? 'EMPTY' : '✓ VALID')));
-            Logger::info('=================================');
-
-            // 调用 save() 方法
-            $saved = FreshRSS_Context::$user_conf->save();
-            Logger::info('Config save() called - Result: ' . ($saved ? 'TRUE' : 'FALSE'));
-            
-            // 验证保存是否成功（重新读取配置）
-            $verifyConfig = FreshRSS_Context::$user_conf;
-            Logger::info('Verify after save - Service: ' . ($verifyConfig->TranslateDefaultService ?? 'NOT SET'));
-            Logger::info('Verify after save - TargetLang: ' . ($verifyConfig->TranslateTargetLang ?? 'NOT SET'));
-            
-            // 保存成功后，重定向回配置页面
-            if ($saved) {
-                Logger::info('Configuration saved successfully, redirecting...');
-                $redirect_url = _url('extension', 'configure', 'e', 'TranslateDigest');
-                header('Location: ' . $redirect_url);
-                exit();
-            } else {
-                Logger::error('Failed to save configuration - save() returned false');
-                $this->view['error'] = 'Configuration save failed';
-            }
-        } 
-        
-        // 无论请求类型是什么，都获取token统计信息
-        $this->view['token_stats'] = TokenCounter::getStats();
-
-        // 只有在GET请求时才记录API Key状态
-        // FreshRSS 使用 Minz_Request::isPost() 来检查是否为 POST 请求
-        if (!Minz_Request::isPost()) {
-            Logger::debug('Configure action: GET request (loading page)');
-            // 读取并记录当前已保存的 API Key 状态（掩码显示）
-            $deepseekSaved = FreshRSS_Context::$user_conf->DeepSeekApiKey ?? '';
-            $geminiSaved = FreshRSS_Context::$user_conf->GeminiApiKey ?? '';
-            
-            $deepseekMasked = empty($deepseekSaved) ? 'EMPTY' : (substr($deepseekSaved, 0, 4) . '...' . substr($deepseekSaved, -4));
-            $geminiMasked = empty($geminiSaved) ? 'EMPTY' : (substr($geminiSaved, 0, 4) . '...' . substr($geminiSaved, -4));
-            
-            Logger::info('Key status on load: DeepSeek=' . $deepseekMasked . ', Gemini=' . $geminiMasked);
+            $this->saveConfiguration();
+            return;
         }
+
+        Logger::debug('Configure action: GET request (loading page)');
+    }
+
+    /**
+     * 保存配置表单
+     */
+    private function saveConfiguration() {
+        Logger::info('Configure action: POST request received');
+
+        $translateService = Minz_Request::param('TranslateDefaultService', 'google');
+        $translateTitles = Minz_Request::param('TranslateTitles', []);
+        $summarizeContents = Minz_Request::param('SummarizeContents', []);
+        $translateSkipIfSame = Minz_Request::param('TranslateSkipIfSame', 0) ? '1' : '0';
+        $targetLang = Minz_Request::param('TranslateTargetLang', 'zh');
+        $tokenMaxChars = Minz_Request::param('TokenMaxChars', '4000');
+
+        $keys = [
+            'deepseek' => Minz_Request::param('DeepSeekApiKey', ''),
+            'gemini'   => Minz_Request::param('GeminiApiKey', ''),
+            'deepl'    => Minz_Request::param('DeepLApiKey', ''),
+            'openai'   => Minz_Request::param('OpenAIApiKey', ''),
+        ];
+        $endpoints = [
+            'deepseek' => '',
+            'gemini'   => trim(Minz_Request::param('GeminiEndpoint', '')),
+            'deepl'    => trim(Minz_Request::param('DeepLEndpoint', '')),
+            'openai'   => trim(Minz_Request::param('OpenAIEndpoint', '')),
+        ];
+        $models = [
+            'deepseek' => trim(Minz_Request::param('DeepSeekModel', '')),
+            'gemini'   => trim(Minz_Request::param('GeminiModel', '')),
+            'deepl'    => '',
+            'openai'   => trim(Minz_Request::param('OpenAIModel', '')),
+        ];
+
+        Logger::info('POST params - Service: ' . $translateService . ', TargetLang: ' . $targetLang
+            . ', TranslateTitles: ' . count($translateTitles) . ', SummarizeContents: ' . count($summarizeContents));
+
+        // 逐个验证已填写的服务（只记录日志，不阻止保存）
+        $validationErrors = [];
+        foreach (self::$providersToValidate as $service => $meta) {
+            $this->validateProviderConfig(
+                $service,
+                $meta[0],
+                $keys[$service],
+                $meta[1] ? $endpoints[$service] : '',
+                $meta[2] ? $models[$service] : '',
+                $validationErrors
+            );
+        }
+        $this->view['validationErrors'] = $validationErrors;
+
+        $conf = FreshRSS_Context::$user_conf;
+        $conf->TranslateDefaultService = $translateService;
+        $conf->TranslateTitles = json_encode($translateTitles);
+        $conf->SummarizeContents = json_encode($summarizeContents);
+        $conf->TranslateSkipIfSame = $translateSkipIfSame;
+        $conf->TranslateTargetLang = $targetLang;
+        $conf->TokenMaxChars = $tokenMaxChars;
+        $conf->DeepSeekApiKey = $keys['deepseek'];
+        $conf->DeepSeekModel = $models['deepseek'];
+        $conf->GeminiApiKey = $keys['gemini'];
+        $conf->GeminiModel = $models['gemini'];
+        $conf->GeminiEndpoint = $endpoints['gemini'];
+        $conf->DeepLApiKey = $keys['deepl'];
+        $conf->DeepLEndpoint = $endpoints['deepl'];
+        $conf->OpenAIApiKey = $keys['openai'];
+        $conf->OpenAIEndpoint = $endpoints['openai'];
+        $conf->OpenAIModel = $models['openai'];
+
+        Logger::info('Keys saved - DeepSeek: ' . $this->describeKey($keys['deepseek']));
+        Logger::info('Keys saved - Gemini: ' . $this->describeKey($keys['gemini']) . ' | Endpoint: ' . ($endpoints['gemini'] === '' ? 'DEFAULT' : $endpoints['gemini']));
+        Logger::info('Keys saved - DeepL: ' . $this->describeKey($keys['deepl']) . ' | Endpoint: ' . ($endpoints['deepl'] === '' ? 'AUTO' : $endpoints['deepl']));
+        Logger::info('Keys saved - OpenAI: ' . $this->describeKey($keys['openai']) . ' | Endpoint: ' . ($endpoints['openai'] === '' ? 'DEFAULT' : $endpoints['openai']));
+
+        $saved = $conf->save();
+        Logger::info('Config save() called - Result: ' . ($saved ? 'TRUE' : 'FALSE'));
+
+        if ($saved) {
+            header('Location: ' . _url('extension', 'configure', 'e', 'TranslateDigest'));
+            exit();
+        }
+
+        Logger::error('Failed to save configuration - save() returned false');
+        $this->view['error'] = 'Configuration save failed';
+    }
+
+    /**
+     * 验证单个服务的配置，结果写入 $validationErrors
+     */
+    private function validateProviderConfig($service, $label, $apiKey, $endpoint, $model, array &$validationErrors) {
+        if ($apiKey === '' && $endpoint === '') {
+            Logger::info($label . ' validation: SKIPPED (empty)');
+            return;
+        }
+
+        try {
+            $provider = ProviderFactory::create($service);
+            if ($apiKey !== '' && method_exists($provider, 'setApiKey')) {
+                $provider->setApiKey($apiKey);
+            }
+            if ($endpoint !== '' && method_exists($provider, 'setEndpoint')) {
+                $provider->setEndpoint($endpoint);
+            }
+            if ($model !== '' && method_exists($provider, 'setModel')) {
+                $provider->setModel($model);
+            }
+
+            $result = $provider->validateKey();
+            if (empty($result['ok'])) {
+                $message = $label . ' 验证失败: ' . ($result['message'] ?? '未知错误');
+                Logger::warning($message);
+                $validationErrors[$service] = $message;
+                return;
+            }
+            Logger::info($label . ' validation: ✓ VALID');
+        } catch (Throwable $e) {
+            $message = $label . ' 验证异常: ' . $e->getMessage();
+            Logger::warning($message);
+            $validationErrors[$service] = $message;
+        }
+    }
+
+    /**
+     * 生成用于日志的 API Key 描述（掩码显示，避免泄露）
+     */
+    private function describeKey($apiKey) {
+        if ($apiKey === '' || $apiKey === null) {
+            return 'EMPTY';
+        }
+        return 'SET (' . substr($apiKey, 0, 4) . '...' . substr($apiKey, -4) . ')';
     }
 
     public function handleUninstallAction() {
         // 清除插件配置项（从 FreshRSS_Context 中）
         $configKeys = [
-            'TranslateDefaultService', 'TranslateTitles', 'FeedServiceMap',
-            'TranslateTargetLang', 'TranslateSkipIfSame', 'SummarizeContent', 
-            'SummarizeContents', 'MaxSummaryChars', 'TokenMaxChars',
+            'TranslateDefaultService', 'TranslateTitles',
+            'TranslateTargetLang', 'TranslateSkipIfSame',
+            'SummarizeContents', 'TokenMaxChars',
             'DeepSeekApiKey', 'DeepSeekModel',
             'GeminiApiKey', 'GeminiModel', 'GeminiEndpoint', 'DeepLApiKey', 'DeepLEndpoint',
             'OpenAIApiKey', 'OpenAIEndpoint', 'OpenAIModel',
-            TokenCounter::STATS_KEY
+            'TranslateTitlesCN_TokenStats'
         ];
-        
+
         foreach ($configKeys as $key) {
             if (isset(FreshRSS_Context::$user_conf->$key)) {
                 unset(FreshRSS_Context::$user_conf->$key);
             }
         }
-        
+
         FreshRSS_Context::$user_conf->save();
         Logger::info('Configuration cleared on uninstall');
     }
-
 
     public function handleEntry($entry) {
         try {
             $controller = new TranslateController();
             return $controller->processEntry($entry);
-        } catch (Exception $e) {
+        } catch (Throwable $e) {
             Logger::exception($e, 'Entry processing');
             return $entry;
         }
@@ -335,137 +230,26 @@ class TranslateDigestExtension extends Minz_Extension {
     private function listUsers(): array {
         $users = [];
         $path = DATA_PATH . '/users';
-        
+
         if (!is_dir($path)) {
             Logger::error("Users directory not found: $path");
             return $users;
         }
-        
+
         $handle = opendir($path);
         if ($handle === false) {
             Logger::error("Failed to open users directory: $path");
             return $users;
         }
-        
+
         while (($entry = readdir($handle)) !== false) {
             if ($entry !== '.' && $entry !== '..' && is_dir($path . '/' . $entry)) {
                 $users[] = $entry;
             }
         }
         closedir($handle);
-        
+
         return $users;
-    }
-
-    public function addTranslationOption($feed) {
-        $feed->TranslateTitles = '0';
-        return $feed;
-    }
-
-    public function handleTestAction() {
-        header('Content-Type: application/json');
-        $text = Minz_Request::param('test-text', '');
-        
-        if (empty($text)) {
-            return $this->view->_error(404);
-        }
-        
-        try {
-            // 从 FreshRSS_Context 读取配置
-            $service = FreshRSS_Context::$user_conf->TranslateDefaultService ?? 'google';
-            $targetLang = FreshRSS_Context::$user_conf->TranslateTargetLang ?? 'zh';
-            
-            $translationService = new TranslationService($service, $targetLang);
-            $translated = $translationService->translate($text);
-            
-            $summary = '';
-            $sumService = new SummarizationService($service, $targetLang, 200);
-            $summary = $sumService->summarize($text);
-            
-            $this->view->_path('configure');
-            $this->view->testResult = [
-                'success' => true,
-                'translated' => $translated,
-                'summary' => $summary
-            ];
-        } catch (Exception $e) {
-            Logger::exception($e, 'Test action');
-            $this->view->_path('configure');
-            $this->view->testResult = [
-                'success' => false,
-                'error' => $e->getMessage()
-            ];
-        }
-    }
-
-    public function handleValidateKeyAction() {
-        header('Content-Type: application/json');
-        $service = Minz_Request::param('service', '');
-        $apiKey = Minz_Request::param('api-key', '');
-        $endpoint = trim(Minz_Request::param('endpoint', ''));
-        $model = trim(Minz_Request::param('model', ''));
-
-        // 记录请求（API Key 使用掩码避免泄露）
-        $maskedKey = empty($apiKey) ? '' : (substr($apiKey, 0, 4) . '...' . substr($apiKey, -4));
-        Logger::info("ValidateKeyAction received: service=$service, apiKeyMasked=$maskedKey");
-
-        // DeepLX / 本地 OpenAI 兼容服务（Ollama 等）不需要 API Key
-        if (empty($service) || (empty($apiKey) && $service !== 'deepl' && $service !== 'openai')) {
-            Logger::error('ValidateKeyAction missing parameters');
-            echo json_encode(['success' => false, 'message' => '缺少参数']);
-            return;
-        }
-        
-        try {
-            require_once('lib/providers/AbstractProvider.php');
-            
-            $providerClass = null;
-            if ($service === 'deepseek') {
-                require_once('lib/providers/DeepSeekProvider.php');
-                $providerClass = 'DeepSeekProvider';
-            } elseif ($service === 'gemini') {
-                require_once('lib/providers/GeminiProvider.php');
-                $providerClass = 'GeminiProvider';
-            } elseif ($service === 'deepl') {
-                require_once('lib/providers/DeepLProvider.php');
-                $providerClass = 'DeepLProvider';
-            } elseif ($service === 'openai') {
-                require_once('lib/providers/OpenAICompatibleProvider.php');
-                $providerClass = 'OpenAICompatibleProvider';
-            } else {
-                Logger::error("ValidateKeyAction unsupported service: $service");
-                echo json_encode(['success' => false, 'message' => '不支持的服务']);
-                return;
-            }
-            
-            if (!class_exists($providerClass)) {
-                Logger::error("ValidateKeyAction provider class not found: $providerClass");
-                echo json_encode(['success' => false, 'message' => '提供商类不存在']);
-                return;
-            }
-            
-            Logger::debug("ValidateKeyAction instantiating provider: $providerClass");
-            $provider = new $providerClass();
-            // 使用表单里当前填写的值（可能尚未保存），避免验证旧配置
-            if (!empty($apiKey) && method_exists($provider, 'setApiKey')) {
-                $provider->setApiKey($apiKey);
-            }
-            if (!empty($endpoint) && method_exists($provider, 'setEndpoint')) {
-                $provider->setEndpoint($endpoint);
-            }
-            if (!empty($model) && method_exists($provider, 'setModel')) {
-                $provider->setModel($model);
-            }
-            $result = $provider->validateKey();
-            $ok = is_array($result) ? ($result['ok'] ?? false) : (bool)$result;
-            $msg = is_array($result) ? ($result['message'] ?? ($ok ? 'API Key 有效' : 'API Key 无效或无法连接')) : ($ok ? 'API Key 有效' : 'API Key 无效或无法连接');
-            Logger::info("ValidateKeyAction result: ok=" . ($ok ? 'true' : 'false') . ", message=$msg");
-
-            echo json_encode(['success' => $ok, 'message' => $msg]);
-        } catch (Exception $e) {
-            Logger::exception($e, 'Validate key action');
-            echo json_encode(['success' => false, 'message' => $e->getMessage()]);
-        }
     }
 
     /**
@@ -480,53 +264,23 @@ class TranslateDigestExtension extends Minz_Extension {
         $endpoint = trim(Minz_Request::param('endpoint', ''));
         $model = trim(Minz_Request::param('model', ''));
 
-        if (empty($service)) {
+        if ($service === '') {
             echo json_encode(['success' => false, 'models' => [], 'message' => '缺少 service 参数'], JSON_UNESCAPED_UNICODE);
             return;
         }
 
-        $maskedKey = empty($apiKey) ? '' : (substr($apiKey, 0, 4) . '...' . substr($apiKey, -4));
-        Logger::info("ListModelsAction received: service=$service, apiKeyMasked=$maskedKey");
+        Logger::info('ListModelsAction received: service=' . $service . ', apiKey=' . $this->describeKey($apiKey));
 
         try {
-            switch ($service) {
-                case 'deepseek':
-                    require_once('lib/providers/DeepSeekProvider.php');
-                    $provider = new DeepSeekProvider();
-                    if (!empty($apiKey)) {
-                        $provider->setApiKey($apiKey);
-                    }
-                    break;
-                case 'gemini':
-                    require_once('lib/providers/GeminiProvider.php');
-                    $provider = new GeminiProvider();
-                    if (!empty($apiKey)) {
-                        $provider->setApiKey($apiKey);
-                    }
-                    if (!empty($endpoint)) {
-                        $provider->setEndpoint($endpoint);
-                    }
-                    if (!empty($model)) {
-                        $provider->setModel($model);
-                    }
-                    break;
-                case 'openai':
-                    require_once('lib/providers/OpenAICompatibleProvider.php');
-                    $provider = new OpenAICompatibleProvider();
-                    if (!empty($apiKey)) {
-                        $provider->setApiKey($apiKey);
-                    }
-                    if (!empty($endpoint)) {
-                        $provider->setEndpoint($endpoint);
-                    }
-                    break;
-                default:
-                    echo json_encode([
-                        'success' => false,
-                        'models' => [],
-                        'message' => '该服务不支持获取模型列表（' . $service . '）'
-                    ], JSON_UNESCAPED_UNICODE);
-                    return;
+            $provider = ProviderFactory::create($service);
+            if ($apiKey !== '' && method_exists($provider, 'setApiKey')) {
+                $provider->setApiKey($apiKey);
+            }
+            if ($endpoint !== '' && method_exists($provider, 'setEndpoint')) {
+                $provider->setEndpoint($endpoint);
+            }
+            if ($model !== '' && method_exists($provider, 'setModel')) {
+                $provider->setModel($model);
             }
 
             $result = $provider->listModels();
@@ -534,75 +288,16 @@ class TranslateDigestExtension extends Minz_Extension {
             $models = $result['models'] ?? [];
             $message = $result['message'] ?? ($ok ? ('共 ' . count($models) . ' 个模型') : '获取模型列表失败');
 
-            Logger::info("ListModelsAction result: ok=" . ($ok ? 'true' : 'false') . ', count=' . count($models));
+            Logger::info('ListModelsAction result: ok=' . ($ok ? 'true' : 'false') . ', count=' . count($models));
 
             echo json_encode([
                 'success' => $ok,
                 'models' => $models,
                 'message' => $message
             ], JSON_UNESCAPED_UNICODE);
-        } catch (Exception $e) {
+        } catch (Throwable $e) {
             Logger::exception($e, 'List models action');
             echo json_encode(['success' => false, 'models' => [], 'message' => $e->getMessage()], JSON_UNESCAPED_UNICODE);
-        }
-    }
-
-    public function handleTokenStatsAction() {
-        header('Content-Type: application/json; charset=utf-8');
-        
-        try {
-            $stats = TokenCounter::getStats();
-            
-            echo json_encode([
-                'success' => true,
-                'stats' => $stats
-            ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
-        } catch (Exception $e) {
-            Logger::exception($e, 'Token stats action');
-            echo json_encode(['success' => false, 'message' => $e->getMessage()]);
-        }
-    }
-
-    public function handleResetStatsAction() {
-        header('Content-Type: application/json; charset=utf-8');
-        
-        try {
-            TokenCounter::resetAllStats();
-            echo json_encode(['success' => true, 'message' => 'Token 统计已重置']);
-        } catch (Exception $e) {
-            Logger::exception($e, 'Reset stats action');
-            echo json_encode(['success' => false, 'message' => $e->getMessage()]);
-        }
-    }
-
-    public function handleDebugAction() {
-        header('Content-Type: application/json');
-        
-        try {
-            // 从 FreshRSS_Context 读取配置
-            $feeds = FreshRSS_Factory::createFeedDao()->listFeeds();
-            
-            $feedList = [];
-            foreach ($feeds as $feedId => $feed) {
-                $feedList[] = [
-                    'id' => $feedId,
-                    'name' => $feed->name(),
-                    'translateEnabled' => isset($config['TranslateTitles'][$feedId]) && $config['TranslateTitles'][$feedId] === '1',
-                    'summarizeEnabled' => isset($config['SummarizeContents'][$feedId]) && $config['SummarizeContents'][$feedId] === '1'
-                ];
-            }
-            
-            echo json_encode([
-                'success' => true,
-                'config' => $config,
-                'feeds' => $feedList,
-                'hasApiKey' => [
-                    'deepseek' => !empty($config['DeepSeekApiKey'])
-                ]
-            ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
-        } catch (Exception $e) {
-            Logger::exception($e, 'Debug action');
-            echo json_encode(['success' => false, 'error' => $e->getMessage()]);
         }
     }
 }

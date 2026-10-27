@@ -83,10 +83,7 @@ class OpenAICompatibleProvider extends AbstractProvider {
             return '';
         }
 
-        $payload = $this->buildPayload([
-            ['role' => 'system', 'content' => self::$prompts['translate']],
-            ['role' => 'user', 'content' => 'Translate into ' . $targetLang . ': ' . $text]
-        ], 'translate');
+        $payload = $this->buildPayload($this->buildTranslateMessages($text, $targetLang), 'translate');
 
         $data = $this->makeRequest($payload);
         if ($data === null) {
@@ -106,10 +103,7 @@ class OpenAICompatibleProvider extends AbstractProvider {
             return '';
         }
 
-        $payload = $this->buildPayload([
-            ['role' => 'system', 'content' => self::$prompts['summarize']],
-            ['role' => 'user', 'content' => 'Summarize in ' . $targetLang . ' within ' . $maxChars . ' characters: ' . $clean]
-        ], 'summarize');
+        $payload = $this->buildPayload($this->buildSummarizeMessages($clean, $targetLang, $maxChars), 'summarize');
 
         $data = $this->makeRequest($payload);
         if ($data === null) {
@@ -156,28 +150,6 @@ class OpenAICompatibleProvider extends AbstractProvider {
         }
 
         $data = $this->httpGet(rtrim($base, '/') . '/models', $this->getHeaders());
-        if ($data === null) {
-            return ['ok' => false, 'models' => [], 'message' => '请求模型列表失败'];
-        }
-        if (isset($data['error'])) {
-            $msg = is_array($data['error']) ? ($data['error']['message'] ?? 'unknown') : (string)$data['error'];
-            return ['ok' => false, 'models' => [], 'message' => $msg];
-        }
-        if (!isset($data['data']) || !is_array($data['data'])) {
-            return ['ok' => false, 'models' => [], 'message' => '响应中没有模型列表'];
-        }
-
-        $models = [];
-        foreach ($data['data'] as $item) {
-            if (is_array($item) && !empty($item['id'])) {
-                $models[] = $item['id'];
-            }
-        }
-        sort($models);
-        return ['ok' => true, 'models' => $models, 'message' => '共 ' . count($models) . ' 个模型'];
-    }
-
-    public function getDefaultModel() {
-        return '';
+        return $this->parseModelList($data, 'data', 'id');
     }
 }

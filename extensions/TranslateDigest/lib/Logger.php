@@ -36,9 +36,9 @@ class Logger {
     }
 
     /**
-     * 记录异常
+     * 记录异常（同时支持 Exception 与 PHP 7+ 的 Error/TypeError）
      */
-    public static function exception(Exception $e, $context = '') {
+    public static function exception(Throwable $e, $context = '') {
         $msg = $context ? "$context: " : '';
         $msg .= $e->getMessage() . ' (' . $e->getFile() . ':' . $e->getLine() . ')';
         self::error($msg);

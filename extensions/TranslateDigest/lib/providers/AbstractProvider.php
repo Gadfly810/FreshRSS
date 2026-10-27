@@ -3,25 +3,22 @@
  * 抽象翻译提供商基类
  * 提取公共的 HTTP 请求和文本处理逻辑
  */
+require_once(__DIR__ . '/ITranslationProvider.php');
+require_once(__DIR__ . '/../Logger.php');
+require_once(__DIR__ . '/../TextUtil.php');
+
 abstract class AbstractProvider implements ITranslationProvider {
     
     protected $apiKey;
     protected $model;
     protected $endpoint;
-    
-    // Token 使用信息（从最后一次请求获取）
-    protected $lastTokenInfo = [
-        'prompt_tokens' => 0,
-        'completion_tokens' => 0,
-        'total_tokens' => 0
-    ];
-    
+
     // Prompt 模板
     protected static $prompts = [
         'translate' => 'You are a professional translation engine. Output ONLY the translated text without explanation.',
         'summarize' => 'Summarize the article, and provide three parts: summary, abstract, and opinions. The opinion section should be listed as a list, using Markdown to reply.'
     ];
-    // 'summarize' => 'You are a concise summarization engine. Output ONLY the summary.'
+
     // 请求参数默认值
     protected static $payloadDefaults = [
         'translate' => ['temperature' => 0.2, 'max_tokens' => 800],
@@ -34,51 +31,71 @@ abstract class AbstractProvider implements ITranslationProvider {
     protected abstract function getHeaders();
 
     /**
+     * 获取实际请求地址
+     * 默认直接用 $this->endpoint；需要把凭据拼进 URL 的提供商（如 Gemini）覆盖此方法
+     */
+    protected function getRequestUrl() {
+        return $this->endpoint;
+    }
+
+    /**
      * 执行 HTTP POST 请求
      * @param array $payload 请求负载
      * @param int $timeout 超时时间（秒）
      * @return array|null 响应数据
      */
     protected function makeRequest($payload, $timeout = 20) {
+        $url = $this->getRequestUrl();
         $json = json_encode($payload, JSON_UNESCAPED_UNICODE);
         $options = [
             'http' => [
                 'method' => 'POST',
                 'header' => $this->getHeaders(),
                 'content' => $json,
-                'timeout' => $timeout
+                'timeout' => $timeout,
+                'ignore_errors' => true
             ]
         ];
-        
+
         $ctx = stream_context_create($options);
         try {
-            $res = @file_get_contents($this->endpoint, false, $ctx);
+            $res = @file_get_contents($url, false, $ctx);
             if ($res === false) {
-                Logger::error($this->getName() . ' request failed');
+                Logger::error($this->getName() . ' request failed: ' . $url);
                 return null;
             }
-            
-            $data = json_decode($res, true);
-            
-            // 记录原始响应数据，以便调试
+
             Logger::debug($this->getName() . ' raw response: ' . substr($res, 0, 500));
-            
-            if (isset($data['error'])) {
-                Logger::error($this->getName() . ' error: ' . ($data['error']['message'] ?? 'unknown'));
+
+            $data = json_decode($res, true);
+            if (!is_array($data)) {
+                Logger::error($this->getName() . ' invalid JSON response: ' . substr($res, 0, 200));
                 return null;
             }
-            
-            // 提取 token 使用信息
-            $this->extractTokenInfo($data);
-            
-            // 记录提取到的 token 信息
-            Logger::debug($this->getName() . ' extracted token info: ' . print_r($this->lastTokenInfo, true));
-            
+
+            if ($this->isErrorResponse($data)) {
+                return null;
+            }
+
             return $data;
         } catch (Exception $e) {
             Logger::exception($e, $this->getName() . ' request');
             return null;
         }
+    }
+
+    /**
+     * 判断响应是否为错误，并记录日志
+     * 默认处理 OpenAI 风格的 {"error": {"message": ...}}；
+     * 使用其它错误格式的提供商（如 DeepL）覆盖此方法
+     */
+    protected function isErrorResponse($data) {
+        if (!isset($data['error'])) {
+            return false;
+        }
+        $err = $data['error'];
+        Logger::error($this->getName() . ' error: ' . (is_array($err) ? ($err['message'] ?? 'unknown') : (string)$err));
+        return true;
     }
 
     /**
@@ -123,37 +140,66 @@ abstract class AbstractProvider implements ITranslationProvider {
     }
 
     /**
-     * 从响应数据中提取 token 信息
+     * 从 {"data": [{"id": ...}]} 或 {"models": [{"name": ...}]} 中解析模型名
+     * @param array $data 响应数据
+     * @param string $listKey 列表字段名（data / models）
+     * @param string $nameKey 名称字段名（id / name）
+     * @param string $prefix 需要从名称中去掉的前缀（如 models/）
+     * @return array ['ok' => bool, 'models' => string[], 'message' => string]
      */
-    protected function extractTokenInfo($data) {
-        if (isset($data['usage'])) {
-            $this->lastTokenInfo = [
-                'prompt_tokens' => $data['usage']['prompt_tokens'] ?? 0,
-                'completion_tokens' => $data['usage']['completion_tokens'] ?? 0,
-                'total_tokens' => $data['usage']['total_tokens'] ?? 0
-            ];
-            Logger::debug($this->getName() . ' tokens - prompt: ' . $this->lastTokenInfo['prompt_tokens'] 
-                . ', completion: ' . $this->lastTokenInfo['completion_tokens'] 
-                . ', total: ' . $this->lastTokenInfo['total_tokens']);
+    protected function parseModelList($data, $listKey, $nameKey, $prefix = '') {
+        if ($data === null) {
+            return ['ok' => false, 'models' => [], 'message' => '请求模型列表失败'];
         }
+        if (isset($data['error'])) {
+            $err = $data['error'];
+            $msg = is_array($err) ? ($err['message'] ?? 'unknown') : (string)$err;
+            return ['ok' => false, 'models' => [], 'message' => $msg];
+        }
+        if (!isset($data[$listKey]) || !is_array($data[$listKey])) {
+            return ['ok' => false, 'models' => [], 'message' => '响应中没有模型列表'];
+        }
+
+        $models = [];
+        foreach ($data[$listKey] as $item) {
+            if (!is_array($item) || empty($item[$nameKey])) {
+                continue;
+            }
+            $models[] = $prefix === '' ? $item[$nameKey] : str_replace($prefix, '', $item[$nameKey]);
+        }
+        sort($models);
+        return ['ok' => true, 'models' => $models, 'message' => '共 ' . count($models) . ' 个模型'];
     }
 
     /**
-     * 获取最后一次请求的 token 使用情况
+     * 构造翻译消息列表
      */
-    public function getLastTokenInfo() {
-        return $this->lastTokenInfo;
+    protected function buildTranslateMessages($text, $targetLang) {
+        return [
+            ['role' => 'system', 'content' => self::$prompts['translate']],
+            ['role' => 'user', 'content' => 'Translate into ' . $targetLang . ': ' . $text]
+        ];
     }
 
     /**
-     * 获取翻译 Prompt
+     * 构造摘要消息列表
+     */
+    protected function buildSummarizeMessages($text, $targetLang, $maxChars) {
+        return [
+            ['role' => 'system', 'content' => self::$prompts['summarize']],
+            ['role' => 'user', 'content' => 'Summarize in ' . $targetLang . ' within ' . $maxChars . ' characters: ' . $text]
+        ];
+    }
+
+    /**
+     * 获取翻译 Prompt（供需要单段 prompt 的提供商使用，如 Gemini）
      */
     protected function getTranslatePrompt($text, $targetLang) {
         return self::$prompts['translate'] . "\n\nTranslate into " . $targetLang . ': ' . $text;
     }
 
     /**
-     * 获取摘要 Prompt
+     * 获取摘要 Prompt（供需要单段 prompt 的提供商使用，如 Gemini）
      */
     protected function getSummarizePrompt($text, $targetLang, $maxChars) {
         return self::$prompts['summarize'] . "\n\nSummarize in " . $targetLang . ' within ' . $maxChars . ' characters: ' . $text;

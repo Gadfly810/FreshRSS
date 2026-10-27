@@ -119,57 +119,18 @@ class DeepLProvider extends AbstractProvider {
     }
 
     /**
-     * 覆盖父类请求方法：DeepL 的错误响应使用 {"message": "..."} 格式（非 error.message），
-     * 因此需要单独解析；同时开启 ignore_errors 以便读取 4xx/5xx 的响应体
+     * DeepL 的错误响应使用 {"message": "..."} / {"code": 456} 格式（非 error.message）
      */
-    protected function makeRequest($payload, $timeout = 20) {
-        $json = json_encode($payload, JSON_UNESCAPED_UNICODE);
-        $options = [
-            'http' => [
-                'method' => 'POST',
-                'header' => $this->getHeaders(),
-                'content' => $json,
-                'timeout' => $timeout,
-                'ignore_errors' => true
-            ]
-        ];
-
-        $ctx = stream_context_create($options);
-        try {
-            $res = @file_get_contents($this->endpoint, false, $ctx);
-            if ($res === false) {
-                Logger::error($this->getName() . ' request failed: ' . $this->endpoint);
-                return null;
-            }
-
-            Logger::debug($this->getName() . ' raw response: ' . substr($res, 0, 500));
-
-            $data = json_decode($res, true);
-            if (!is_array($data)) {
-                Logger::error($this->getName() . ' invalid JSON response: ' . substr($res, 0, 200));
-                return null;
-            }
-
-            if (isset($data['code']) && (int)$data['code'] !== 200) {
-                Logger::error($this->getName() . ' error code: ' . $data['code'] . ' ' . ($data['message'] ?? ''));
-                return null;
-            }
-            if (isset($data['message'])) {
-                Logger::error($this->getName() . ' error: ' . $data['message']);
-                return null;
-            }
-            if (isset($data['error'])) {
-                $err = $data['error'];
-                Logger::error($this->getName() . ' error: ' . (is_array($err) ? ($err['message'] ?? 'unknown') : $err));
-                return null;
-            }
-
-            $this->extractTokenInfo($data);
-            return $data;
-        } catch (Exception $e) {
-            Logger::exception($e, $this->getName() . ' request');
-            return null;
+    protected function isErrorResponse($data) {
+        if (isset($data['code']) && (int)$data['code'] !== 200) {
+            Logger::error($this->getName() . ' error code: ' . $data['code'] . ' ' . ($data['message'] ?? ''));
+            return true;
         }
+        if (isset($data['message'])) {
+            Logger::error($this->getName() . ' error: ' . $data['message']);
+            return true;
+        }
+        return parent::isErrorResponse($data);
     }
 
     /**
@@ -183,9 +144,7 @@ class DeepLProvider extends AbstractProvider {
         return mb_substr($text, 0, $maxChars);
     }
 
-    public function validateKey() {
-        $isOfficial = ($this->endpoint === self::OFFICIAL_FREE || $this->endpoint === self::OFFICIAL_PRO);
-        if (empty($this->apiKey) && $isOfficial) {
+    public function validateKey() {        $isOfficial = ($this->endpoint === self::OFFICIAL_FREE || $this->endpoint === self::OFFICIAL_PRO);        if (empty($this->apiKey) && $isOfficial) {
             return ['ok' => false, 'message' => '未配置 DeepL Auth Key'];
         }
 
@@ -205,9 +164,5 @@ class DeepLProvider extends AbstractProvider {
         }
 
         return ['ok' => true, 'message' => empty($this->apiKey) ? 'DeepLX 服务可用（无需 Key）' : 'DeepL Key 验证通过'];
-    }
-
-    public function getDefaultModel() {
-        return '';
     }
 }

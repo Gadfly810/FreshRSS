@@ -5,6 +5,4 @@ interface ITranslationProvider {
     public function supportsSummarize();
     public function summarize($text, $targetLang = 'zh', $maxChars = 200);
     public function validateKey();
-    public function getDefaultModel();
-    public function getLastTokenInfo();
 }

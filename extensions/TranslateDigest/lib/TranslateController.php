@@ -89,8 +89,8 @@ class TranslateController {
                     Logger::debug("Translation returned empty or same: $translatedTitle");
                 }
             } catch (Exception $e) {
-            Logger::exception($e, 'Title translation for: ' . $title);
-        }
+                Logger::exception($e, 'Title translation for: ' . $title);
+            }
 
         return $entry;
     }
@@ -108,16 +108,16 @@ class TranslateController {
 
             $serviceKey = $config['TranslateDefaultService'];
             $targetLang = $config['TranslateTargetLang'];
-            $maxChars = $config['TokenMaxChars'];
+            $maxChars = (int)$config['TokenMaxChars'];
 
-            Logger::debug("Summarizing content for feed $feedId (service: $serviceKey, lang: $targetLang)");
+            Logger::debug("Summarizing content for feed $feedId (service: $serviceKey, lang: $targetLang, maxChars: $maxChars)");
 
-            $summaryService = new SummarizationService($serviceKey, 'en', 200);
+            $summaryService = new SummarizationService($serviceKey, $targetLang, $maxChars);
             $summary = $summaryService->summarize($content);
 
             if (!empty($summary)) {
-                // 翻译摘要到目标语言
-                if ($targetLang !== 'en') {
+                // 摘要若已为目标语言则无需再翻译
+                if ($targetLang !== 'en' && !$this->isTargetLang($summary, $targetLang)) {
                     try {
                         $translationService = new TranslationService($serviceKey, $targetLang);
                         $translatedSummary = $translationService->translate($summary);
@@ -155,53 +155,32 @@ class TranslateController {
             return false;
         }
 
+        $ratio = 0.6;
         switch ($targetLang) {
             case 'zh':
-                return $this->isChinese($text);
-            case 'en':
-                return $this->isEnglish($text);
+                return $this->charRatio('/[\x{4e00}-\x{9fa5}]/u', $text) > $ratio;
             case 'ja':
-                return $this->isJapanese($text);
+                return $this->charRatio('/[\x{3040}-\x{30FF}\x{4E00}-\x{9FFF}]/u', $text) > 0.3;
+            case 'en':
+                // 非 ASCII 字符少于 10% 视为英文
+                return $this->charRatio('/[^\x00-\x7F]/u', $text) < 0.1;
+            case 'fr':
+            case 'de':
+                // 拉丁字母为主且不含中文/日文假名
+                return $this->charRatio('/[\x{4e00}-\x{9fa5}\x{3040}-\x{30FF}]/u', $text) < 0.05;
             default:
                 return false;
         }
     }
 
     /**
-     * 检测是否为中文
+     * 计算匹配字符数占总字符数的比例
      */
-    private function isChinese($text) {
+    private function charRatio($pattern, $text) {
         $len = mb_strlen($text);
         if ($len === 0) {
-            return false;
+            return 0.0;
         }
-        
-        $chineseChars = preg_match_all('/[\x{4e00}-\x{9fa5}]/u', $text, $m);
-        return ($chineseChars / max($len, 1)) > 0.6;
-    }
-
-    /**
-     * 检测是否为英文
-     */
-    private function isEnglish($text) {
-        $len = mb_strlen($text);
-        if ($len === 0) {
-            return false;
-        }
-        
-        $nonAscii = preg_match_all('/[^\x00-\x7F]/u', $text, $m);
-        return $nonAscii < ($len * 0.1);
-    }
-
-    /**
-     * 检测是否为日文
-     */
-    private function isJapanese($text) {
-        // 简单检测：包含日文假名和汉字
-        $hiragana = preg_match_all('/[\x{3040}-\x{309F}]/u', $text, $m);
-        $katakana = preg_match_all('/[\x{30A0}-\x{30FF}]/u', $text, $m);
-        $kanji = preg_match_all('/[\x{4E00}-\x{9FFF}]/u', $text, $m);
-        
-        return ($hiragana + $katakana + $kanji) > 2;
+        return preg_match_all($pattern, $text) / $len;
     }
 }

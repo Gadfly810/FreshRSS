@@ -59,14 +59,4 @@ class TextUtil {
     public static function escapeHtml($text) {
         return htmlspecialchars($text, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
     }
-
-    /**
-     * 截断文本到指定长度
-     */
-    public static function truncate($text, $length = 200, $suffix = '...') {
-        if (mb_strlen($text) <= $length) {
-            return $text;
-        }
-        return mb_substr($text, 0, $length - mb_strlen($suffix)) . $suffix;
-    }
 }

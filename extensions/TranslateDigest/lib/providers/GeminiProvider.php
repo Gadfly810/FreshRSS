@@ -189,85 +189,26 @@ class GeminiProvider extends AbstractProvider {
             return ['ok' => false, 'models' => [], 'message' => '响应中没有模型列表'];
         }
 
-        $models = [];
+        // 只保留支持 generateContent 的模型（过滤 text-embedding 等）
+        $filtered = ['models' => []];
         foreach ($data['models'] as $item) {
-            $name = is_array($item) ? ($item['name'] ?? '') : '';
-            if ($name === '') {
+            if (!is_array($item) || empty($item['name'])) {
                 continue;
             }
-            // 只保留支持 generateContent 的模型
             if (isset($item['supportedGenerationMethods']) && is_array($item['supportedGenerationMethods'])
                 && !in_array('generateContent', $item['supportedGenerationMethods'], true)) {
                 continue;
             }
-            $models[] = preg_replace('#^models/#', '', $name);
+            $filtered['models'][] = $item;
         }
-        sort($models);
-        return ['ok' => true, 'models' => $models, 'message' => '共 ' . count($models) . ' 个模型'];
-    }
-
-    public function getDefaultModel() {
-        return '';
+        return $this->parseModelList($filtered, 'models', 'name', 'models/');
     }
 
     /**
-     * 覆盖父类的 makeRequest 方法，因为 Gemini API 使用 API key 作为 URL 参数
+     * Gemini 使用 API key 作为 URL 参数，需要覆盖请求地址
      */
-    protected function makeRequest($payload, $timeout = 20) {
-        $url = $this->endpoint . '?key=' . $this->apiKey;
-        $json = json_encode($payload, JSON_UNESCAPED_UNICODE);
-        $options = [
-            'http' => [
-                'method' => 'POST',
-                'header' => implode("\r\n", $this->getHeaders()),
-                'content' => $json,
-                'timeout' => $timeout
-            ]
-        ];
-        
-        $ctx = stream_context_create($options);
-        try {
-            $res = @file_get_contents($url, false, $ctx);
-            if ($res === false) {
-                Logger::error($this->getName() . ' request failed');
-                return null;
-            }
-            
-            $data = json_decode($res, true);
-            
-            Logger::debug($this->getName() . ' raw response: ' . substr($res, 0, 500));
-            
-            if (isset($data['error'])) {
-                Logger::error($this->getName() . ' error: ' . ($data['error']['message'] ?? 'unknown'));
-                return null;
-            }
-            
-            // Gemini API 使用不同的 token 统计结构
-            $this->extractTokenInfo($data);
-            
-            Logger::debug($this->getName() . ' extracted token info: ' . print_r($this->lastTokenInfo, true));
-            
-            return $data;
-        } catch (Exception $e) {
-            Logger::exception($e, $this->getName() . ' request');
-            return null;
-        }
-    }
-
-    /**
-     * 覆盖 token 信息提取方法，适配 Gemini API 响应格式
-     */
-    protected function extractTokenInfo($data) {
-        if (isset($data['usageMetadata'])) {
-            $this->lastTokenInfo = [
-                'prompt_tokens' => $data['usageMetadata']['promptTokenCount'] ?? 0,
-                'completion_tokens' => $data['usageMetadata']['candidatesTokenCount'] ?? 0,
-                'total_tokens' => $data['usageMetadata']['totalTokenCount'] ?? 0
-            ];
-            Logger::debug($this->getName() . ' tokens - prompt: ' . $this->lastTokenInfo['prompt_tokens'] 
-                . ', completion: ' . $this->lastTokenInfo['completion_tokens'] 
-                . ', total: ' . $this->lastTokenInfo['total_tokens']);
-        }
+    protected function getRequestUrl() {
+        return $this->endpoint . '?key=' . $this->apiKey;
     }
 
     /**

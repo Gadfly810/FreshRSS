@@ -108,8 +108,7 @@
     flex: 1;
 }
 
-/* 模型选择器 */
-.model-picker {
+/* 模型选择器 */.model-picker {
     display: flex;
     align-items: center;
     gap: 8px;
@@ -131,23 +130,6 @@
 
 .fetch-status.err {
     color: #c00;
-}
-
-/* 验证状态 */
-.validation-status {
-    display: inline-block;
-    margin-left: 10px;
-    font-size: 12px;
-    padding: 2px 8px;
-    border-radius: 3px;
-}
-
-.stat-label {
-    font-weight: bold;
-}
-
-.stat-value {
-    font-weight: normal;
 }
 
 /* 说明文本 */
@@ -457,11 +439,6 @@
             <?php if (empty($feeds)): ?>
             <span>暂无订阅源，请先在 FreshRSS 中添加</span>
             <?php else: ?>
-            <!-- 隐藏字段：记录所有订阅源ID以处理未勾选的checkbox -->
-            <?php foreach ($feeds as $feedId => $feed): ?>
-            <input type="hidden" name="feed_ids[]" value="<?php echo $feedId; ?>">
-            <?php endforeach; ?>
-            
             <table class="feed-list">
                 <thead>
                     <tr>
@@ -496,27 +473,6 @@
         </div>
     </div>
 
-    <!-- Token 统计信息 -->
-    <?php 
-    // 确保token_stats存在且为数组
-    if (!isset($token_stats) || !is_array($token_stats)) {
-        $token_stats = TokenCounter::getStats();
-    }
-    
-    // 确保所有提供商的统计数据存在
-    if (!isset($token_stats['deepseek'])) {
-        $token_stats['deepseek'] = ['prompt' => 0, 'completion' => 0, 'total' => 0];
-    }
-    
-    if (!isset($token_stats['deepl'])) {
-        $token_stats['deepl'] = ['prompt' => 0, 'completion' => 0, 'total' => 0];
-    }
-
-    if (!isset($token_stats['openai'])) {
-        $token_stats['openai'] = ['prompt' => 0, 'completion' => 0, 'total' => 0];
-    }
-    ?>
-    
     <!-- 提交与取消按钮 -->
     <div class="form-group form-actions">
         <div class="group-controls">
