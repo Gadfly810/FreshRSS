@@ -180,6 +180,7 @@
         'DeepSeekModel' => $conf->DeepSeekModel ?? '',
         'GeminiApiKey' => $conf->GeminiApiKey ?? '',
         'GeminiModel' => $conf->GeminiModel ?? '',
+        'GeminiEndpoint' => $conf->GeminiEndpoint ?? '',
         'DeepLApiKey' => $conf->DeepLApiKey ?? '',
         'DeepLEndpoint' => $conf->DeepLEndpoint ?? '',
         'OpenAIApiKey' => $conf->OpenAIApiKey ?? '',
@@ -353,9 +354,22 @@
                 <datalist id="gemini-model-list"></datalist>
                 <button type="button" class="btn btn-small fetch-models"
                     data-service="gemini" data-target="gemini-model" data-list="gemini-model-list"
-                    data-key-input="gemini-key">获取模型列表</button>
+                    data-key-input="gemini-key" data-endpoint-input="gemini-endpoint">获取模型列表</button>
             </div>
             <span class="help-text fetch-status" data-service="gemini"></span>
+        </div>
+    </div>
+
+    <div class="form-group">
+        <label class="group-name" for="gemini-endpoint">Gemini 接口地址:</label>
+        <div class="group-controls">
+            <input id="gemini-endpoint" type="text" name="GeminiEndpoint"
+                value="<?php echo htmlspecialchars($config['GeminiEndpoint'] ?? '', ENT_QUOTES); ?>"
+                placeholder="留空使用 https://generativelanguage.googleapis.com">
+            <span class="help-text">
+                可填 Base URL 或完整地址，会自动补全 <code>/v1beta/models/{model}:generateContent</code><br>
+                示例：<code>https://generativelanguage.googleapis.com</code>、<code>https://your-proxy.com/v1beta</code>、<code>https://your-proxy.com/v1beta/models/{model}:generateContent</code>
+            </span>
         </div>
     </div>
 

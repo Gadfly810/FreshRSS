@@ -78,6 +78,7 @@ class TranslateDigestExtension extends Minz_Extension {
             $geminiKey = Minz_Request::param('GeminiApiKey', '');
             $geminiMasked = empty($geminiKey) ? '' : (substr($geminiKey, 0, 4) . '...' . substr($geminiKey, -4));
             $geminiModel = trim(Minz_Request::param('GeminiModel', ''));
+            $geminiEndpoint = trim(Minz_Request::param('GeminiEndpoint', ''));
             $deeplKey = Minz_Request::param('DeepLApiKey', '');
             $deeplMasked = empty($deeplKey) ? '' : (substr($deeplKey, 0, 4) . '...' . substr($deeplKey, -4));
             $deeplEndpoint = Minz_Request::param('DeepLEndpoint', '');
@@ -131,6 +132,9 @@ class TranslateDigestExtension extends Minz_Extension {
                 try {
                     $provider = new GeminiProvider();
                     $provider->setApiKey($geminiKey);
+                    if (!empty($geminiEndpoint)) {
+                        $provider->setEndpoint($geminiEndpoint);
+                    }
                     if (!empty($geminiModel)) {
                         $provider->setModel($geminiModel);
                     }
@@ -229,6 +233,7 @@ class TranslateDigestExtension extends Minz_Extension {
             FreshRSS_Context::$user_conf->DeepSeekModel = $deepseekModel;
             FreshRSS_Context::$user_conf->GeminiApiKey = $geminiKey;
             FreshRSS_Context::$user_conf->GeminiModel = $geminiModel;
+            FreshRSS_Context::$user_conf->GeminiEndpoint = $geminiEndpoint;
             FreshRSS_Context::$user_conf->DeepLApiKey = $deeplKey;
             FreshRSS_Context::$user_conf->DeepLEndpoint = $deeplEndpoint;
             FreshRSS_Context::$user_conf->OpenAIApiKey = $openaiKey;
@@ -298,7 +303,7 @@ class TranslateDigestExtension extends Minz_Extension {
             'TranslateTargetLang', 'TranslateSkipIfSame', 'SummarizeContent', 
             'SummarizeContents', 'MaxSummaryChars', 'TokenMaxChars',
             'DeepSeekApiKey', 'DeepSeekModel',
-            'GeminiApiKey', 'GeminiModel', 'DeepLApiKey', 'DeepLEndpoint',
+            'GeminiApiKey', 'GeminiModel', 'GeminiEndpoint', 'DeepLApiKey', 'DeepLEndpoint',
             'OpenAIApiKey', 'OpenAIEndpoint', 'OpenAIModel',
             TokenCounter::STATS_KEY
         ];
@@ -497,6 +502,9 @@ class TranslateDigestExtension extends Minz_Extension {
                     $provider = new GeminiProvider();
                     if (!empty($apiKey)) {
                         $provider->setApiKey($apiKey);
+                    }
+                    if (!empty($endpoint)) {
+                        $provider->setEndpoint($endpoint);
                     }
                     if (!empty($model)) {
                         $provider->setModel($model);

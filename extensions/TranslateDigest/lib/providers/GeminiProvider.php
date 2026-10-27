@@ -3,22 +3,66 @@ require_once('AbstractProvider.php');
 
 class GeminiProvider extends AbstractProvider {
 
+    const DEFAULT_ENDPOINT = 'https://generativelanguage.googleapis.com';
+
+    /** 用户配置的原始端点（未补全） */
+    private $configuredEndpoint = '';
+
     public function __construct() {
         $this->apiKey = FreshRSS_Context::$user_conf->GeminiApiKey ?? '';
         $this->model = trim(FreshRSS_Context::$user_conf->GeminiModel ?? '');
-        $this->endpoint = $this->buildEndpoint($this->model);
+        $this->configuredEndpoint = trim(FreshRSS_Context::$user_conf->GeminiEndpoint ?? '');
+        $this->endpoint = $this->buildEndpoint($this->configuredEndpoint, $this->model);
+    }
+
+    public function setEndpoint($endpoint) {
+        $this->configuredEndpoint = trim($endpoint);
+        $this->endpoint = $this->buildEndpoint($this->configuredEndpoint, $this->model);
     }
 
     public function setModel($model) {
         $model = trim($model);
         if ($model !== '') {
             $this->model = $model;
-            $this->endpoint = $this->buildEndpoint($model);
+            $this->endpoint = $this->buildEndpoint($this->configuredEndpoint, $model);
         }
     }
 
-    private function buildEndpoint($model) {
-        return 'https://generativelanguage.googleapis.com/v1beta/models/' . $model . ':generateContent';
+    /**
+     * 允许填 Base URL 或完整地址，统一补全为 .../v1beta/models/{model}:generateContent
+     * 完整地址中若含 {model} 占位符会被替换
+     */
+    private function buildEndpoint($endpoint, $model) {
+        if ($endpoint === '') {
+            $endpoint = self::DEFAULT_ENDPOINT;
+        }
+        if (strpos($endpoint, '{model}') !== false) {
+            return str_replace('{model}', $model, $endpoint);
+        }
+        if (strpos($endpoint, ':generateContent') !== false) {
+            return $endpoint;
+        }
+        $endpoint = rtrim($endpoint, '/');
+        if (substr($endpoint, -strlen('/models')) === '/models') {
+            return $endpoint . '/' . $model . ':generateContent';
+        }
+        if (preg_match('#/v1(beta|alpha)?$#', $endpoint)) {
+            return $endpoint . '/models/' . $model . ':generateContent';
+        }
+        return $endpoint . '/v1beta/models/' . $model . ':generateContent';
+    }
+
+    /**
+     * 获取模型列表用的 Base URL（去掉版本段，调用方自行拼接 /v1beta/models）
+     */
+    private function getBaseUrl() {
+        $endpoint = $this->endpoint;
+        $pos = strpos($endpoint, '/models/');
+        if ($pos === false) {
+            $pos = strpos($endpoint, '/models');
+        }
+        $base = $pos !== false ? substr($endpoint, 0, $pos) : rtrim($endpoint, '/');
+        return preg_replace('#/v1(beta|alpha)[0-9]*$#', '', $base);
     }
 
     public function setApiKey($apiKey) {
@@ -132,7 +176,7 @@ class GeminiProvider extends AbstractProvider {
             return ['ok' => false, 'models' => [], 'message' => '未配置 Gemini API Key'];
         }
 
-        $url = 'https://generativelanguage.googleapis.com/v1beta/models?key=' . urlencode($this->apiKey);
+        $url = $this->getBaseUrl() . '/v1beta/models?key=' . urlencode($this->apiKey);
         $data = $this->httpGet($url, ['Content-Type: application/json']);
         if ($data === null) {
             return ['ok' => false, 'models' => [], 'message' => '请求模型列表失败'];
