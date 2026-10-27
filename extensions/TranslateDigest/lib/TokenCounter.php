@@ -6,26 +6,20 @@ class TokenCounter {
     
     const STATS_KEY = 'TranslateTitlesCN_TokenStats';
 
-    private static $costConfig = [
-        'google'   => ['prompt' => 0, 'completion' => 0],
-        'deepseek' => ['prompt' => 0.14, 'completion' => 0.28],
-        'qwen'  => ['prompt' => 0.002, 'completion' => 0.006],
-        'gemini'  => ['prompt' => 0, 'completion' => 0],
-        // OpenAI 兼容服务的计费取决于具体后端（官方 / 中转 / 本地），无法统一估算
-        'openai'  => ['prompt' => 0, 'completion' => 0]
-    ];
+    // 参与 token 统计的提供商
+    private static $knownProviders = ['google', 'deepseek', 'qwen', 'gemini', 'deepl', 'openai'];
 
     private static $defaultStats = [
-        'deepseek' => ['prompt' => 0, 'completion' => 0, 'total' => 0, 'cost' => 0],
-        'qwen'  => ['prompt' => 0, 'completion' => 0, 'total' => 0, 'cost' => 0],
-        'gemini'  => ['prompt' => 0, 'completion' => 0, 'total' => 0, 'cost' => 0],
-        // DeepL 按字符计费且响应不含 token 用量，故仅占位、不参与成本累计
-        'deepl'   => ['prompt' => 0, 'completion' => 0, 'total' => 0, 'cost' => 0],
-        'openai'  => ['prompt' => 0, 'completion' => 0, 'total' => 0, 'cost' => 0],
+        'deepseek' => ['prompt' => 0, 'completion' => 0, 'total' => 0],
+        'qwen'  => ['prompt' => 0, 'completion' => 0, 'total' => 0],
+        'gemini'  => ['prompt' => 0, 'completion' => 0, 'total' => 0],
+        // DeepL 按字符计费且响应不含 token 用量，仅占位
+        'deepl'   => ['prompt' => 0, 'completion' => 0, 'total' => 0],
+        'openai'  => ['prompt' => 0, 'completion' => 0, 'total' => 0],
     ];
 
     public static function recordTokens($tokenInfo, $provider, $type = 'translate') {
-        if (empty($tokenInfo) || !isset(self::$costConfig[$provider])) {
+        if (empty($tokenInfo) || !in_array($provider, self::$knownProviders, true)) {
             return;
         }
 
@@ -38,8 +32,6 @@ class TokenCounter {
             return;
         }
 
-        $cost = self::calculateCost($provider, $promptTokens, $completionTokens);
-        
         // Update stats
         $stats = self::getStats();
         if (!isset($stats[$provider])) {
@@ -48,17 +40,15 @@ class TokenCounter {
         $stats[$provider]['prompt'] += $promptTokens;
         $stats[$provider]['completion'] += $completionTokens;
         $stats[$provider]['total'] += $totalTokens;
-        $stats[$provider]['cost'] += $cost;
         self::saveStats($stats);
 
         Logger::info(sprintf(
-            'Token recorded - Provider: %s | Type: %s | Tokens: %d (prompt: %d, completion: %d) | Cost: ¥%.6f',
+            'Token recorded - Provider: %s | Type: %s | Tokens: %d (prompt: %d, completion: %d)',
             strtoupper($provider),
             $type,
             $totalTokens,
             $promptTokens,
-            $completionTokens,
-            $cost
+            $completionTokens
         ));
     }
 
@@ -97,14 +87,5 @@ class TokenCounter {
             Logger::info("Token stats reset for provider: $provider");
         }
     }
-    
-    private static function calculateCost($provider, $promptTokens, $completionTokens) {
-        $config = self::$costConfig[$provider] ?? null;
-        if (!$config) return 0;
 
-        $promptCost = ($promptTokens / 1000000) * $config['prompt'];
-        $completionCost = ($completionTokens / 1000000) * $config['completion'];
-        
-        return $promptCost + $completionCost;
-    }
 }

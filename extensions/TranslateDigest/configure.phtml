@@ -492,19 +492,19 @@
     
     // 确保所有提供商的统计数据存在
     if (!isset($token_stats['deepseek'])) {
-        $token_stats['deepseek'] = ['prompt' => 0, 'completion' => 0, 'total' => 0, 'cost' => 0];
+        $token_stats['deepseek'] = ['prompt' => 0, 'completion' => 0, 'total' => 0];
     }
     
     if (!isset($token_stats['qwen'])) {
-        $token_stats['qwen'] = ['prompt' => 0, 'completion' => 0, 'total' => 0, 'cost' => 0];
+        $token_stats['qwen'] = ['prompt' => 0, 'completion' => 0, 'total' => 0];
     }
 
     if (!isset($token_stats['deepl'])) {
-        $token_stats['deepl'] = ['prompt' => 0, 'completion' => 0, 'total' => 0, 'cost' => 0];
+        $token_stats['deepl'] = ['prompt' => 0, 'completion' => 0, 'total' => 0];
     }
 
     if (!isset($token_stats['openai'])) {
-        $token_stats['openai'] = ['prompt' => 0, 'completion' => 0, 'total' => 0, 'cost' => 0];
+        $token_stats['openai'] = ['prompt' => 0, 'completion' => 0, 'total' => 0];
     }
     ?>
     
