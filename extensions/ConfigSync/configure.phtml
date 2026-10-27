@@ -4,7 +4,7 @@ declare(strict_types=1);
 $status = $this->getStatus();
 ?>
 
-<fieldset class="group">
+<fieldset>
 	<legend>ConfigSync</legend>
 
 	<div class="form-group">
@@ -31,6 +31,9 @@ $status = $this->getStatus();
 				<code>freshrss-configsync.json</code> and is created on the first push.
 			</p>
 			<?php } ?>
+			<p class="help">
+				Storage credentials and the passphrase are read from the top-level user
+				configuration keys
 				<code>ConfigSyncBackend</code>, <code>ConfigSyncGistToken</code>,
 				<code>ConfigSyncGistId</code>, <code>ConfigSyncWebDavUrl</code>,
 				<code>ConfigSyncWebDavUser</code>, <code>ConfigSyncWebDavPass</code>,
