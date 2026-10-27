@@ -76,6 +76,9 @@ class TranslateDigestExtension extends Minz_Extension {
             $geminiKey = Minz_Request::param('GeminiApiKey', '');
             $geminiMasked = empty($geminiKey) ? '' : (substr($geminiKey, 0, 4) . '...' . substr($geminiKey, -4));
             $geminiModel = Minz_Request::param('GeminiModel', 'gemini-2.0-flash-exp');
+            $deeplKey = Minz_Request::param('DeepLApiKey', '');
+            $deeplMasked = empty($deeplKey) ? '' : (substr($deeplKey, 0, 4) . '...' . substr($deeplKey, -4));
+            $deeplEndpoint = Minz_Request::param('DeepLEndpoint', '');
             $tokenMaxChars = Minz_Request::param('TokenMaxChars', '4000');
             $summarizeContent = Minz_Request::param('SummarizeContent', 0) ? '1' : '0';
             $maxSummaryChars = Minz_Request::param('MaxSummaryChars', '200');
@@ -161,6 +164,36 @@ class TranslateDigestExtension extends Minz_Extension {
             } else {
                 Logger::info('Gemini key validation: SKIPPED (empty)');
             }
+
+            // DeepL / DeepLX 验证（只记录日志，不阻止保存）
+            if (!empty($deeplKey) || !empty($deeplEndpoint)) {
+                require_once('lib/providers/DeepLProvider.php');
+                try {
+                    $provider = new DeepLProvider();
+                    if (!empty($deeplKey)) {
+                        $provider->setApiKey($deeplKey);
+                    }
+                    if (!empty($deeplEndpoint)) {
+                        $provider->setEndpoint($deeplEndpoint);
+                    }
+                    $result = $provider->validateKey();
+                    if (!$result['ok']) {
+                        $errorMsg = 'DeepL 验证失败: ' . $result['message'];
+                        Logger::warning($errorMsg);
+                        $validationErrors['deepl'] = $errorMsg;
+                        Logger::info('DeepL validation: ✗ INVALID - ' . $result['message']);
+                    } else {
+                        Logger::info('DeepL validation: ✓ VALID');
+                    }
+                } catch (Exception $e) {
+                    $errorMsg = 'DeepL 验证异常: ' . $e->getMessage();
+                    Logger::warning($errorMsg);
+                    $validationErrors['deepl'] = $errorMsg;
+                    Logger::info('DeepL validation: ✗ ERROR - ' . $e->getMessage());
+                }
+            } else {
+                Logger::info('DeepL validation: SKIPPED (empty)');
+            }
             
             // 将验证错误信息存储到视图中
             $this->view['validationErrors'] = $validationErrors;
@@ -177,6 +210,8 @@ class TranslateDigestExtension extends Minz_Extension {
             FreshRSS_Context::$user_conf->QwenModel = $qwenModel;
             FreshRSS_Context::$user_conf->GeminiApiKey = $geminiKey;
             FreshRSS_Context::$user_conf->GeminiModel = $geminiModel;
+            FreshRSS_Context::$user_conf->DeepLApiKey = $deeplKey;
+            FreshRSS_Context::$user_conf->DeepLEndpoint = $deeplEndpoint;
             FreshRSS_Context::$user_conf->TokenMaxChars = $tokenMaxChars;
             FreshRSS_Context::$user_conf->SummarizeContent = $summarizeContent;
             FreshRSS_Context::$user_conf->MaxSummaryChars = $maxSummaryChars;
@@ -185,12 +220,14 @@ class TranslateDigestExtension extends Minz_Extension {
             Logger::info('Keys saved - DeepSeek: ' . (empty($deepseekKey) ? 'EMPTY' : 'SET (' . $deepseekMasked . ')'));
             Logger::info('Keys saved - Qwen: ' . (empty($qwenKey) ? 'EMPTY' : 'SET (' . $qwenMasked . ')'));
             Logger::info('Keys saved - Gemini: ' . (empty($geminiKey) ? 'EMPTY' : 'SET (' . $geminiMasked . ')'));
+            Logger::info('Keys saved - DeepL: ' . (empty($deeplKey) ? 'EMPTY' : 'SET (' . $deeplMasked . ')') . ' | Endpoint: ' . (empty($deeplEndpoint) ? 'AUTO' : $deeplEndpoint));
             
             // 总结验证结果
             Logger::info('=== Configuration Save Summary ===');
             Logger::info('DeepSeek: ' . (isset($validationErrors['deepseek']) ? '✗ ' . $validationErrors['deepseek'] : (empty($deepseekKey) ? 'EMPTY' : '✓ VALID')));
             Logger::info('Qwen: ' . (isset($validationErrors['qwen']) ? '✗ ' . $validationErrors['qwen'] : (empty($qwenKey) ? 'EMPTY' : '✓ VALID')));
             Logger::info('Gemini: ' . (isset($validationErrors['gemini']) ? '✗ ' . $validationErrors['gemini'] : (empty($geminiKey) ? 'EMPTY' : '✓ VALID')));
+            Logger::info('DeepL: ' . (isset($validationErrors['deepl']) ? '✗ ' . $validationErrors['deepl'] : ((empty($deeplKey) && empty($deeplEndpoint)) ? 'EMPTY' : '✓ VALID')));
             Logger::info('=================================');
 
             // 调用 save() 方法
@@ -241,7 +278,7 @@ class TranslateDigestExtension extends Minz_Extension {
             'TranslateTargetLang', 'TranslateSkipIfSame', 'SummarizeContent', 
             'SummarizeContents', 'MaxSummaryChars', 'TokenMaxChars',
             'DeepSeekApiKey', 'DeepSeekModel', 'QwenApiKey', 'QwenModel',
-            'GeminiApiKey', 'GeminiModel',
+            'GeminiApiKey', 'GeminiModel', 'DeepLApiKey', 'DeepLEndpoint',
             TokenCounter::STATS_KEY
         ];
         
@@ -344,7 +381,8 @@ class TranslateDigestExtension extends Minz_Extension {
         $maskedKey = empty($apiKey) ? '' : (substr($apiKey, 0, 4) . '...' . substr($apiKey, -4));
         Logger::info("ValidateKeyAction received: service=$service, apiKeyMasked=$maskedKey");
 
-        if (empty($service) || empty($apiKey)) {
+        // DeepLX 自建服务不需要 API Key
+        if (empty($service) || (empty($apiKey) && $service !== 'deepl')) {
             Logger::error('ValidateKeyAction missing parameters');
             echo json_encode(['success' => false, 'message' => '缺少参数']);
             return;
@@ -363,6 +401,9 @@ class TranslateDigestExtension extends Minz_Extension {
             } elseif ($service === 'gemini') {
                 require_once('lib/providers/GeminiProvider.php');
                 $providerClass = 'GeminiProvider';
+            } elseif ($service === 'deepl') {
+                require_once('lib/providers/DeepLProvider.php');
+                $providerClass = 'DeepLProvider';
             } else {
                 Logger::error("ValidateKeyAction unsupported service: $service");
                 echo json_encode(['success' => false, 'message' => '不支持的服务']);

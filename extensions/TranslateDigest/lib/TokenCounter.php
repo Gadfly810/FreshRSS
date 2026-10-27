@@ -17,6 +17,8 @@ class TokenCounter {
         'deepseek' => ['prompt' => 0, 'completion' => 0, 'total' => 0, 'cost' => 0],
         'qwen'  => ['prompt' => 0, 'completion' => 0, 'total' => 0, 'cost' => 0],
         'gemini'  => ['prompt' => 0, 'completion' => 0, 'total' => 0, 'cost' => 0],
+        // DeepL 按字符计费且响应不含 token 用量，故仅占位、不参与成本累计
+        'deepl'   => ['prompt' => 0, 'completion' => 0, 'total' => 0, 'cost' => 0],
     ];
 
     public static function recordTokens($tokenInfo, $provider, $type = 'translate') {

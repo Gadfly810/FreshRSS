@@ -7,6 +7,7 @@ require_once(__DIR__ . '/providers/GoogleProvider.php');
 require_once(__DIR__ . '/providers/DeepSeekProvider.php');
 require_once(__DIR__ . '/providers/QwenProvider.php');
 require_once(__DIR__ . '/providers/GeminiProvider.php');
+require_once(__DIR__ . '/providers/DeepLProvider.php');
 
 class SummarizationService {
     
@@ -29,6 +30,8 @@ class SummarizationService {
                 return new QwenProvider();
             case 'gemini':
                 return new GeminiProvider();
+            case 'deepl':
+                return new DeepLProvider();
             case 'google':
             default:
                 return new GoogleProvider();

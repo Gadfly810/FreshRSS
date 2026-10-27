@@ -157,6 +157,8 @@
         'QwenModel' => $conf->QwenModel ?? 'qwen-plus',
         'GeminiApiKey' => $conf->GeminiApiKey ?? '',
         'GeminiModel' => $conf->GeminiModel ?? 'gemini-2.0-flash-exp',
+        'DeepLApiKey' => $conf->DeepLApiKey ?? '',
+        'DeepLEndpoint' => $conf->DeepLEndpoint ?? '',
         'TranslateTargetLang' => $conf->TranslateTargetLang ?? 'zh',
         'TranslateSkipIfSame' => ($conf->TranslateSkipIfSame ?? '0') === '1',
         'TokenMaxChars' => $conf->TokenMaxChars ?? '4000',
@@ -216,6 +218,17 @@
                     <?php echo $config['TranslateDefaultService'] === 'gemini' ? 'checked' : ''; ?>>
                 <label for="service-gemini">Google Gemini 
                     <?php if (!empty($config['GeminiApiKey'])): ?>
+                        <span style="font-size: 12px;">✓ 已配置</span>
+                    <?php else: ?>
+                        <span style="font-size: 12px;">⚠ 未配置</span>
+                    <?php endif; ?>
+                </label>
+            </div>
+            <div class="form-group">
+                <input type="radio" id="service-deepl" name="TranslateDefaultService" value="deepl" 
+                    <?php echo $config['TranslateDefaultService'] === 'deepl' ? 'checked' : ''; ?>>
+                <label for="service-deepl">DeepL / DeepLX 
+                    <?php if (!empty($config['DeepLApiKey']) || !empty($config['DeepLEndpoint'])): ?>
                         <span style="font-size: 12px;">✓ 已配置</span>
                     <?php else: ?>
                         <span style="font-size: 12px;">⚠ 未配置</span>
@@ -338,6 +351,36 @@
     </div>
 
 
+    <!-- DeepL / DeepLX 配置 -->
+    <div class="form-group">
+        <label class="group-name" for="deepl-key">DeepL Auth Key:</label>
+        <div class="group-controls">
+            <div class="api-key-group">
+                <input id="deepl-key" type="password" name="DeepLApiKey" 
+                    value="<?php echo htmlspecialchars($config['DeepLApiKey'] ?? '', ENT_QUOTES); ?>" 
+                    placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx:fx">
+                <button type="button" class="btn btn-small" onclick="document.getElementById('deepl-key').value=''; document.getElementById('deepl-key').type='text'; setTimeout(() => document.getElementById('deepl-key').type='password', 100);">清除</button>
+            </div>
+            <span class="help-text">
+                在 <a href="https://www.deepl.com/pro-api" target="_blank">DeepL API</a> 获取 Auth Key（免费版以 <code>:fx</code> 结尾）。<br>
+                使用自建 <a href="https://github.com/OwO-Network/DeepLX" target="_blank">DeepLX</a> 时可留空。
+            </span>
+        </div>
+    </div>
+
+    <div class="form-group">
+        <label class="group-name" for="deepl-endpoint">DeepL 接口地址:</label>
+        <div class="group-controls">
+            <input id="deepl-endpoint" type="text" name="DeepLEndpoint" 
+                value="<?php echo htmlspecialchars($config['DeepLEndpoint'] ?? '', ENT_QUOTES); ?>" 
+                placeholder="留空自动判断（官方）">
+            <span class="help-text">
+                留空时按 Key 自动选择：<code>:fx</code> → https://api-free.deepl.com/v2/translate，否则 https://api.deepl.com/v2/translate<br>
+                DeepLX 示例：<code>http://127.0.0.1:1188/translate</code>
+            </span>
+        </div>
+    </div>
+
     <!-- 订阅源翻译设置 -->
     <div class="form-group">
         <label class="group-name">订阅源设置:</label>
@@ -398,6 +441,10 @@
     
     if (!isset($token_stats['qwen'])) {
         $token_stats['qwen'] = ['prompt' => 0, 'completion' => 0, 'total' => 0, 'cost' => 0];
+    }
+
+    if (!isset($token_stats['deepl'])) {
+        $token_stats['deepl'] = ['prompt' => 0, 'completion' => 0, 'total' => 0, 'cost' => 0];
     }
     ?>
     
