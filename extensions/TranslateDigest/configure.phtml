@@ -159,6 +159,9 @@
         'GeminiModel' => $conf->GeminiModel ?? 'gemini-2.0-flash-exp',
         'DeepLApiKey' => $conf->DeepLApiKey ?? '',
         'DeepLEndpoint' => $conf->DeepLEndpoint ?? '',
+        'OpenAIApiKey' => $conf->OpenAIApiKey ?? '',
+        'OpenAIEndpoint' => $conf->OpenAIEndpoint ?? '',
+        'OpenAIModel' => $conf->OpenAIModel ?? '',
         'TranslateTargetLang' => $conf->TranslateTargetLang ?? 'zh',
         'TranslateSkipIfSame' => ($conf->TranslateSkipIfSame ?? '0') === '1',
         'TokenMaxChars' => $conf->TokenMaxChars ?? '4000',
@@ -229,6 +232,17 @@
                     <?php echo $config['TranslateDefaultService'] === 'deepl' ? 'checked' : ''; ?>>
                 <label for="service-deepl">DeepL / DeepLX 
                     <?php if (!empty($config['DeepLApiKey']) || !empty($config['DeepLEndpoint'])): ?>
+                        <span style="font-size: 12px;">✓ 已配置</span>
+                    <?php else: ?>
+                        <span style="font-size: 12px;">⚠ 未配置</span>
+                    <?php endif; ?>
+                </label>
+            </div>
+            <div class="form-group">
+                <input type="radio" id="service-openai" name="TranslateDefaultService" value="openai" 
+                    <?php echo $config['TranslateDefaultService'] === 'openai' ? 'checked' : ''; ?>>
+                <label for="service-openai">OpenAI 兼容 
+                    <?php if (!empty($config['OpenAIApiKey']) || !empty($config['OpenAIEndpoint'])): ?>
                         <span style="font-size: 12px;">✓ 已配置</span>
                     <?php else: ?>
                         <span style="font-size: 12px;">⚠ 未配置</span>
@@ -381,6 +395,48 @@
         </div>
     </div>
 
+    <!-- OpenAI 兼容配置 -->
+    <div class="form-group">
+        <label class="group-name" for="openai-key">OpenAI API Key:</label>
+        <div class="group-controls">
+            <div class="api-key-group">
+                <input id="openai-key" type="password" name="OpenAIApiKey" 
+                    value="<?php echo htmlspecialchars($config['OpenAIApiKey'] ?? '', ENT_QUOTES); ?>" 
+                    placeholder="sk-...">
+                <button type="button" class="btn btn-small" onclick="document.getElementById('openai-key').value=''; document.getElementById('openai-key').type='text'; setTimeout(() => document.getElementById('openai-key').type='password', 100);">清除</button>
+            </div>
+            <span class="help-text">
+                适用于 OpenAI 官方及任何兼容 <code>/v1/chat/completions</code> 的服务（One API、Ollama、LM Studio、vLLM 等）。<br>
+                本地服务（如 Ollama）可留空。
+            </span>
+        </div>
+    </div>
+
+    <div class="form-group">
+        <label class="group-name" for="openai-endpoint">OpenAI 接口地址:</label>
+        <div class="group-controls">
+            <input id="openai-endpoint" type="text" name="OpenAIEndpoint" 
+                value="<?php echo htmlspecialchars($config['OpenAIEndpoint'] ?? '', ENT_QUOTES); ?>" 
+                placeholder="留空使用 https://api.openai.com/v1">
+            <span class="help-text">
+                可填 Base URL 或完整地址，会自动补全 <code>/chat/completions</code><br>
+                示例：<code>https://api.openai.com/v1</code>、<code>https://your-gateway.com/v1</code>、<code>http://127.0.0.1:11434/v1</code>
+            </span>
+        </div>
+    </div>
+
+    <div class="form-group">
+        <label class="group-name" for="openai-model">OpenAI 模型:</label>
+        <div class="group-controls">
+            <input id="openai-model" type="text" name="OpenAIModel" 
+                value="<?php echo htmlspecialchars($config['OpenAIModel'] ?? '', ENT_QUOTES); ?>" 
+                placeholder="gpt-4o-mini">
+            <span class="help-text">
+                默认: gpt-4o-mini；可填任意该服务支持的模型名，如 <code>llama3.1</code>、<code>qwen2.5:7b</code>
+            </span>
+        </div>
+    </div>
+
     <!-- 订阅源翻译设置 -->
     <div class="form-group">
         <label class="group-name">订阅源设置:</label>
@@ -445,6 +501,10 @@
 
     if (!isset($token_stats['deepl'])) {
         $token_stats['deepl'] = ['prompt' => 0, 'completion' => 0, 'total' => 0, 'cost' => 0];
+    }
+
+    if (!isset($token_stats['openai'])) {
+        $token_stats['openai'] = ['prompt' => 0, 'completion' => 0, 'total' => 0, 'cost' => 0];
     }
     ?>
     

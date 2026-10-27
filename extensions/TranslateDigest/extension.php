@@ -79,6 +79,10 @@ class TranslateDigestExtension extends Minz_Extension {
             $deeplKey = Minz_Request::param('DeepLApiKey', '');
             $deeplMasked = empty($deeplKey) ? '' : (substr($deeplKey, 0, 4) . '...' . substr($deeplKey, -4));
             $deeplEndpoint = Minz_Request::param('DeepLEndpoint', '');
+            $openaiKey = Minz_Request::param('OpenAIApiKey', '');
+            $openaiMasked = empty($openaiKey) ? '' : (substr($openaiKey, 0, 4) . '...' . substr($openaiKey, -4));
+            $openaiEndpoint = trim(Minz_Request::param('OpenAIEndpoint', ''));
+            $openaiModel = trim(Minz_Request::param('OpenAIModel', ''));
             $tokenMaxChars = Minz_Request::param('TokenMaxChars', '4000');
             $summarizeContent = Minz_Request::param('SummarizeContent', 0) ? '1' : '0';
             $maxSummaryChars = Minz_Request::param('MaxSummaryChars', '200');
@@ -194,6 +198,39 @@ class TranslateDigestExtension extends Minz_Extension {
             } else {
                 Logger::info('DeepL validation: SKIPPED (empty)');
             }
+
+            // OpenAI 兼容服务验证（只记录日志，不阻止保存）
+            if (!empty($openaiKey) || !empty($openaiEndpoint)) {
+                require_once('lib/providers/OpenAICompatibleProvider.php');
+                try {
+                    $provider = new OpenAICompatibleProvider();
+                    if (!empty($openaiKey)) {
+                        $provider->setApiKey($openaiKey);
+                    }
+                    if (!empty($openaiEndpoint)) {
+                        $provider->setEndpoint($openaiEndpoint);
+                    }
+                    if (!empty($openaiModel)) {
+                        $provider->setModel($openaiModel);
+                    }
+                    $result = $provider->validateKey();
+                    if (!$result['ok']) {
+                        $errorMsg = 'OpenAI 兼容服务验证失败: ' . $result['message'];
+                        Logger::warning($errorMsg);
+                        $validationErrors['openai'] = $errorMsg;
+                        Logger::info('OpenAI validation: ✗ INVALID - ' . $result['message']);
+                    } else {
+                        Logger::info('OpenAI validation: ✓ VALID');
+                    }
+                } catch (Exception $e) {
+                    $errorMsg = 'OpenAI 兼容服务验证异常: ' . $e->getMessage();
+                    Logger::warning($errorMsg);
+                    $validationErrors['openai'] = $errorMsg;
+                    Logger::info('OpenAI validation: ✗ ERROR - ' . $e->getMessage());
+                }
+            } else {
+                Logger::info('OpenAI validation: SKIPPED (empty)');
+            }
             
             // 将验证错误信息存储到视图中
             $this->view['validationErrors'] = $validationErrors;
@@ -212,6 +249,9 @@ class TranslateDigestExtension extends Minz_Extension {
             FreshRSS_Context::$user_conf->GeminiModel = $geminiModel;
             FreshRSS_Context::$user_conf->DeepLApiKey = $deeplKey;
             FreshRSS_Context::$user_conf->DeepLEndpoint = $deeplEndpoint;
+            FreshRSS_Context::$user_conf->OpenAIApiKey = $openaiKey;
+            FreshRSS_Context::$user_conf->OpenAIEndpoint = $openaiEndpoint;
+            FreshRSS_Context::$user_conf->OpenAIModel = $openaiModel;
             FreshRSS_Context::$user_conf->TokenMaxChars = $tokenMaxChars;
             FreshRSS_Context::$user_conf->SummarizeContent = $summarizeContent;
             FreshRSS_Context::$user_conf->MaxSummaryChars = $maxSummaryChars;
@@ -221,6 +261,7 @@ class TranslateDigestExtension extends Minz_Extension {
             Logger::info('Keys saved - Qwen: ' . (empty($qwenKey) ? 'EMPTY' : 'SET (' . $qwenMasked . ')'));
             Logger::info('Keys saved - Gemini: ' . (empty($geminiKey) ? 'EMPTY' : 'SET (' . $geminiMasked . ')'));
             Logger::info('Keys saved - DeepL: ' . (empty($deeplKey) ? 'EMPTY' : 'SET (' . $deeplMasked . ')') . ' | Endpoint: ' . (empty($deeplEndpoint) ? 'AUTO' : $deeplEndpoint));
+            Logger::info('Keys saved - OpenAI: ' . (empty($openaiKey) ? 'EMPTY' : 'SET (' . $openaiMasked . ')') . ' | Endpoint: ' . (empty($openaiEndpoint) ? 'DEFAULT' : $openaiEndpoint) . ' | Model: ' . (empty($openaiModel) ? 'DEFAULT' : $openaiModel));
             
             // 总结验证结果
             Logger::info('=== Configuration Save Summary ===');
@@ -228,6 +269,7 @@ class TranslateDigestExtension extends Minz_Extension {
             Logger::info('Qwen: ' . (isset($validationErrors['qwen']) ? '✗ ' . $validationErrors['qwen'] : (empty($qwenKey) ? 'EMPTY' : '✓ VALID')));
             Logger::info('Gemini: ' . (isset($validationErrors['gemini']) ? '✗ ' . $validationErrors['gemini'] : (empty($geminiKey) ? 'EMPTY' : '✓ VALID')));
             Logger::info('DeepL: ' . (isset($validationErrors['deepl']) ? '✗ ' . $validationErrors['deepl'] : ((empty($deeplKey) && empty($deeplEndpoint)) ? 'EMPTY' : '✓ VALID')));
+            Logger::info('OpenAI: ' . (isset($validationErrors['openai']) ? '✗ ' . $validationErrors['openai'] : ((empty($openaiKey) && empty($openaiEndpoint)) ? 'EMPTY' : '✓ VALID')));
             Logger::info('=================================');
 
             // 调用 save() 方法
@@ -279,6 +321,7 @@ class TranslateDigestExtension extends Minz_Extension {
             'SummarizeContents', 'MaxSummaryChars', 'TokenMaxChars',
             'DeepSeekApiKey', 'DeepSeekModel', 'QwenApiKey', 'QwenModel',
             'GeminiApiKey', 'GeminiModel', 'DeepLApiKey', 'DeepLEndpoint',
+            'OpenAIApiKey', 'OpenAIEndpoint', 'OpenAIModel',
             TokenCounter::STATS_KEY
         ];
         
@@ -381,8 +424,8 @@ class TranslateDigestExtension extends Minz_Extension {
         $maskedKey = empty($apiKey) ? '' : (substr($apiKey, 0, 4) . '...' . substr($apiKey, -4));
         Logger::info("ValidateKeyAction received: service=$service, apiKeyMasked=$maskedKey");
 
-        // DeepLX 自建服务不需要 API Key
-        if (empty($service) || (empty($apiKey) && $service !== 'deepl')) {
+        // DeepLX / 本地 OpenAI 兼容服务（Ollama 等）不需要 API Key
+        if (empty($service) || (empty($apiKey) && $service !== 'deepl' && $service !== 'openai')) {
             Logger::error('ValidateKeyAction missing parameters');
             echo json_encode(['success' => false, 'message' => '缺少参数']);
             return;
@@ -404,6 +447,9 @@ class TranslateDigestExtension extends Minz_Extension {
             } elseif ($service === 'deepl') {
                 require_once('lib/providers/DeepLProvider.php');
                 $providerClass = 'DeepLProvider';
+            } elseif ($service === 'openai') {
+                require_once('lib/providers/OpenAICompatibleProvider.php');
+                $providerClass = 'OpenAICompatibleProvider';
             } else {
                 Logger::error("ValidateKeyAction unsupported service: $service");
                 echo json_encode(['success' => false, 'message' => '不支持的服务']);

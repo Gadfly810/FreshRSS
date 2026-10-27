@@ -8,6 +8,7 @@ require_once(__DIR__ . '/providers/DeepSeekProvider.php');
 require_once(__DIR__ . '/providers/QwenProvider.php');
 require_once(__DIR__ . '/providers/GeminiProvider.php');
 require_once(__DIR__ . '/providers/DeepLProvider.php');
+require_once(__DIR__ . '/providers/OpenAICompatibleProvider.php');
 
 class SummarizationService {
     
@@ -32,6 +33,8 @@ class SummarizationService {
                 return new GeminiProvider();
             case 'deepl':
                 return new DeepLProvider();
+            case 'openai':
+                return new OpenAICompatibleProvider();
             case 'google':
             default:
                 return new GoogleProvider();
