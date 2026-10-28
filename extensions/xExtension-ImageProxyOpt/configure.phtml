@@ -1,0 +1,118 @@
+<?php
+	declare(strict_types=1);
+	/** @var ImageProxyOptExtension $this */
+	$conf = FreshRSS_Context::userConf();
+?>
+<form action="<?= _url('extension', 'configure', 'e', urlencode($this->getName())) ?>" method="post">
+	<input type="hidden" name="_csrf" value="<?= FreshRSS_Auth::csrfToken() ?>" />
+
+	<div class="form-group">
+		<label class="group-name" for="image_proxy_opt_url"><?= _t('ext.imageproxyopt.proxy_url') ?></label>
+		<div class="group-controls">
+			<input type="url" name="image_proxy_opt_url" id="image_proxy_opt_url"
+				value="<?= htmlspecialchars($conf->attributeString('image_proxy_opt_url') ?? '', ENT_COMPAT, 'UTF-8') ?>">
+			<p class="help"><?= _t('ext.imageproxyopt.proxy_url_help') ?></p>
+		</div>
+	</div>
+
+	<div class="form-group">
+		<label class="group-name" for="image_proxy_opt_host_mode"><?= _t('ext.imageproxyopt.host_mode') ?></label>
+		<div class="group-controls">
+			<select name="image_proxy_opt_host_mode" id="image_proxy_opt_host_mode">
+				<?php
+					$mode = $conf->attributeString('image_proxy_opt_host_mode') ?? 'off';
+					foreach (['off', 'allow', 'deny'] as $option) {
+						$selected = $mode === $option ? ' selected="selected"' : '';
+						echo '<option value="' . $option . '"' . $selected . '>' . _t('ext.imageproxyopt.host_mode_' . $option) . '</option>';
+					}
+				?>
+			</select>
+			<p class="help"><?= _t('ext.imageproxyopt.host_mode_help') ?></p>
+		</div>
+	</div>
+
+	<div class="form-group">
+		<label class="group-name" for="image_proxy_opt_host_list"><?= _t('ext.imageproxyopt.host_list') ?></label>
+		<div class="group-controls">
+			<textarea name="image_proxy_opt_host_list" id="image_proxy_opt_host_list" rows="10" class="w100"
+				placeholder="pbs.twimg.com&#10;*.ytimg.com"><?= htmlspecialchars($conf->attributeString('image_proxy_opt_host_list') ?? '', ENT_COMPAT, 'UTF-8') ?></textarea>
+			<p class="help"><?= _t('ext.imageproxyopt.host_list_help') ?></p>
+		</div>
+	</div>
+
+	<div class="form-group">
+		<label class="group-name" for="image_proxy_opt_scheme_http"><?= _t('ext.imageproxyopt.scheme_http') ?></label>
+		<div class="group-controls">
+			<input type="checkbox" name="image_proxy_opt_scheme_http" id="image_proxy_opt_scheme_http" value="1"
+				<?= $conf->attributeBool('image_proxy_opt_scheme_http') ? 'checked' : '' ?>>
+		</div>
+	</div>
+	<div class="form-group">
+		<label class="group-name" for="image_proxy_opt_scheme_https"><?= _t('ext.imageproxyopt.scheme_https') ?></label>
+		<div class="group-controls">
+			<input type="checkbox" name="image_proxy_opt_scheme_https" id="image_proxy_opt_scheme_https" value="1"
+				<?= $conf->attributeBool('image_proxy_opt_scheme_https') ? 'checked' : '' ?>>
+		</div>
+	</div>
+	<div class="form-group">
+		<label class="group-name" for="image_proxy_opt_scheme_default"><?= _t('ext.imageproxyopt.scheme_default') ?></label>
+		<div class="group-controls">
+			<select name="image_proxy_opt_scheme_default" id="image_proxy_opt_scheme_default">
+				<?php
+					$default = $conf->attributeString('image_proxy_opt_scheme_default') ?? 'auto';
+					foreach (['auto', 'http', 'https', '-'] as $option) {
+						$selected = $default === $option ? ' selected="selected"' : '';
+						echo '<option value="' . $option . '"' . $selected . '>' . $option . '</option>';
+					}
+				?>
+			</select>
+			<p class="help"><?= _t('ext.imageproxyopt.scheme_default_help') ?></p>
+		</div>
+	</div>
+	<div class="form-group">
+		<label class="group-name" for="image_proxy_opt_scheme_include"><?= _t('ext.imageproxyopt.scheme_include') ?></label>
+		<div class="group-controls">
+			<input type="checkbox" name="image_proxy_opt_scheme_include" id="image_proxy_opt_scheme_include" value="1"
+				<?= $conf->attributeBool('image_proxy_opt_scheme_include') ? 'checked' : '' ?>>
+		</div>
+	</div>
+	<div class="form-group">
+		<label class="group-name" for="image_proxy_opt_url_encode"><?= _t('ext.imageproxyopt.url_encode') ?></label>
+		<div class="group-controls">
+			<input type="checkbox" name="image_proxy_opt_url_encode" id="image_proxy_opt_url_encode" value="1"
+				<?= $conf->attributeBool('image_proxy_opt_url_encode') ? 'checked' : '' ?>>
+		</div>
+	</div>
+
+	<div class="form-group">
+		<label class="group-name" for="image_proxy_opt_warm_enabled"><?= _t('ext.imageproxyopt.warm_enabled') ?></label>
+		<div class="group-controls">
+			<input type="checkbox" name="image_proxy_opt_warm_enabled" id="image_proxy_opt_warm_enabled" value="1"
+				<?= $conf->attributeBool('image_proxy_opt_warm_enabled') ? 'checked' : '' ?>>
+			<p class="help"><?= _t('ext.imageproxyopt.warm_enabled_help') ?></p>
+		</div>
+	</div>
+	<div class="form-group">
+		<label class="group-name" for="image_proxy_opt_warm_url"><?= _t('ext.imageproxyopt.warm_url') ?></label>
+		<div class="group-controls">
+			<input type="url" name="image_proxy_opt_warm_url" id="image_proxy_opt_warm_url"
+				value="<?= htmlspecialchars($conf->attributeString('image_proxy_opt_warm_url') ?? '', ENT_COMPAT, 'UTF-8') ?>">
+			<p class="help"><?= _t('ext.imageproxyopt.warm_url_help') ?></p>
+		</div>
+	</div>
+	<div class="form-group">
+		<label class="group-name" for="image_proxy_opt_warm_token"><?= _t('ext.imageproxyopt.warm_token') ?></label>
+		<div class="group-controls">
+			<input type="password" name="image_proxy_opt_warm_token" id="image_proxy_opt_warm_token" autocomplete="off"
+				value="<?= htmlspecialchars($conf->attributeString('image_proxy_opt_warm_token') ?? '', ENT_COMPAT, 'UTF-8') ?>">
+			<p class="help"><?= _t('ext.imageproxyopt.warm_token_help') ?></p>
+		</div>
+	</div>
+
+	<div class="form-group form-actions">
+		<div class="group-controls">
+			<button type="submit" class="btn btn-important"><?= _t('gen.action.submit') ?></button>
+			<button type="reset" class="btn"><?= _t('gen.action.cancel') ?></button>
+		</div>
+	</div>
+</form>

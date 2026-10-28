@@ -1,0 +1,8 @@
+{
+	"name": "Image Proxy Opt",
+	"author": "Optimised fork of xExtension-ImageProxy by Frans de Jonge",
+	"description": "Proxy only the images you cannot reach: regex rewriting instead of DOMDocument, host allow/deny list, optional batch cache pre-warming.",
+	"version": "1.0.0",
+	"entrypoint": "ImageProxyOpt",
+	"type": "user"
+}

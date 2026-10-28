@@ -1,0 +1,165 @@
+/**
+ * Image proxy for xExtension-ImageProxyOpt (Cloudflare Worker).
+ *
+ * Deploy on a **custom domain** you own — *.workers.dev is unreliable from mainland China,
+ * which defeats the whole point of this worker.
+ *
+ * Contract:
+ *   GET  /?url=<rawurlencoded absolute URL>   -> the image (edge-cached 7 days)
+ *   POST /                                    -> pre-warm the cache, body:
+ *                                                {"access_token": "...", "urls": ["...", "..."]}
+ *
+ * Bind your own domain via Workers > Triggers > Custom Domains, then set
+ *   proxy_url   = https://img.example.com/?url=
+ *   warm_url    = https://img.example.com/
+ *   warm_token  = the same string as TOKEN below
+ * in the extension settings.
+ */
+
+// Hosts this worker is allowed to fetch. Keep it tight: an open proxy is abused within days.
+const ALLOWED_HOSTS = [
+	'pbs.twimg.com',
+	'i.ytimg.com',
+	'i.imgur.com',
+	// add wildcard suffixes as ".example.com"
+];
+
+// Shared secret for the POST pre-warm endpoint. Set it to the same value as the extension setting.
+const TOKEN = '';
+
+const CACHE_TTL = 604800;			// 7 days
+const MAX_BYTES = 20 * 1024 * 1024;	// stay below the Cloudflare cache limit
+const MAX_WARM_URLS = 50;
+const TIMEOUT_MS = 15000;
+
+export default {
+	async fetch(request, env, ctx) {
+		const url = new URL(request.url);
+		if (request.method === 'POST') {
+			return warm(request, ctx);
+		}
+		if (request.method !== 'GET' && request.method !== 'HEAD') {
+			return new Response('Method Not Allowed', { status: 405 });
+		}
+		const target = url.searchParams.get('url');
+		if (!target) {
+			return new Response('Missing ?url=', { status: 400 });
+		}
+		return proxy(target, request, ctx);
+	},
+};
+
+function allowed(target) {
+	let host;
+	try {
+		host = new URL(target).hostname.toLowerCase();
+	} catch {
+		return false;
+	}
+	return ALLOWED_HOSTS.some((h) => (h.startsWith('.') ? host.endsWith(h) : host === h));
+}
+
+function cacheKey(request, target) {
+	const u = new URL(request.url);
+	u.search = '?url=' + encodeURIComponent(target);
+	return new Request(u.toString(), { method: 'GET' });
+}
+
+async function fetchUpstream(target) {
+	const upstream = new URL(target);
+	return fetch(upstream.toString(), {
+		headers: {
+			// Some CDNs 403 on unknown user agents.
+			'User-Agent': 'Mozilla/5.0 (compatible; freshrss-image-proxy/1.0)',
+			'Accept': 'image/avif,image/webp,image/*,*/*;q=0.8',
+		},
+		redirect: 'follow',
+		cf: { cacheEverything: true, cacheTtl: CACHE_TTL },
+		signal: AbortSignal.timeout(TIMEOUT_MS),
+	});
+}
+
+async function proxy(target, request, ctx) {
+	if (!/^https?:\/\//i.test(target) || !allowed(target)) {
+		return new Response('Forbidden host', { status: 403 });
+	}
+
+	const key = cacheKey(request, target);
+	const cache = caches.default;
+	const hit = await cache.match(key);
+	if (hit) {
+		return hit;
+	}
+
+	let res;
+	try {
+		res = await fetchUpstream(target);
+	} catch (e) {
+		return new Response('Upstream fetch failed: ' + e.message, { status: 502 });
+	}
+	if (!res.ok) {
+		return new Response('Upstream ' + res.status, { status: res.status });
+	}
+
+	const len = Number(res.headers.get('content-length') || 0);
+	if (len > MAX_BYTES) {
+		return new Response('Too large', { status: 502 });
+	}
+
+	const out = new Response(res.body, {
+		status: res.status,
+		statusText: res.statusText,
+		headers: res.headers,
+	});
+	out.headers.set('Cache-Control', 'public, max-age=' + CACHE_TTL + ', immutable');
+	out.headers.set('Access-Control-Allow-Origin', '*');
+	out.headers.delete('Set-Cookie');
+	ctx.waitUntil(cache.put(key, out.clone()));
+	return out;
+}
+
+async function warm(request, ctx) {
+	let body;
+	try {
+		body = await request.json();
+	} catch {
+		return json({ error: 'invalid json' }, 400);
+	}
+	if (TOKEN !== '' && body.access_token !== TOKEN) {
+		return json({ error: 'invalid token' }, 403);
+	}
+	const urls = Array.isArray(body.urls) ? body.urls.slice(0, MAX_WARM_URLS) : [];
+	const cache = caches.default;
+	const results = await Promise.allSettled(urls.map(async (target) => {
+		if (typeof target !== 'string' || !/^https?:\/\//i.test(target) || !allowed(target)) {
+			throw new Error('forbidden: ' + target);
+		}
+		const key = cacheKey(request, target);
+		if (await cache.match(key)) {
+			return 'cached';
+		}
+		const res = await fetchUpstream(target);
+		if (!res.ok) {
+			throw new Error('upstream ' + res.status);
+		}
+		const out = new Response(res.body, {
+			status: res.status,
+			statusText: res.statusText,
+			headers: res.headers,
+		});
+		out.headers.set('Cache-Control', 'public, max-age=' + CACHE_TTL + ', immutable');
+		await cache.put(key, out);
+		return 'warmed';
+	}));
+	return json({
+		warmed: results.filter((r) => r.status === 'fulfilled').length,
+		failed: results.filter((r) => r.status === 'rejected').map((r) => String(r.reason)),
+	});
+}
+
+function json(data, status = 200) {
+	return new Response(JSON.stringify(data), {
+		status,
+		headers: { 'Content-Type': 'application/json' },
+	});
+}

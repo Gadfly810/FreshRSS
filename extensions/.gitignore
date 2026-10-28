@@ -8,3 +8,5 @@
 !ConfigSync/**
 !TranslateDigest/
 !TranslateDigest/**
+!xExtension-ImageProxyOpt/
+!xExtension-ImageProxyOpt/**
