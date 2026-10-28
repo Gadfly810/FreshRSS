@@ -1,3 +1,4 @@
 .token.local
+domain.local
 .wrangler/
 node_modules/

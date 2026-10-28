@@ -1,18 +1,21 @@
 {
-	// Deploy:  pnpx wrangler deploy
+	// Deploy:  ./deploy.sh      (reads the custom domain from domain.local, which is gitignored)
 	// Token:   pnpx wrangler secret put IMAGE_PROXY_TOKEN
+	//
+	// The custom domain is deliberately NOT in this file: it lives in domain.local so that a
+	// public fork of this repository does not advertise someone's private endpoint.
+	// Do not run a bare `wrangler deploy` -- with workers_dev off and no routes here, it would
+	// drop the custom domain binding and leave the worker unreachable.
 	"$schema": "node_modules/wrangler/config-schema.json",
 	"name": "freshrss-image-proxy",
 	"main": "worker.js",
 	"compatibility_date": "2025-09-01",
+	"workers_dev": false,
+	"preview_urls": false,
 
 	// Exact host, or a ".example.com" suffix match. This list is the only protection on GET,
 	// so keep it tight -- anything you add here becomes fetchable by anyone who finds the URL.
 	"vars": {
 		"ALLOWED_HOSTS": "pbs.twimg.com,i.ytimg.com,i.imgur.com,i.redd.it,preview.redd.it,.cdninstagram.com,.fbcdn.net,.googleusercontent.com"
 	}
-
-	// Custom domain (needed in practice -- *.workers.dev is unreliable from mainland China).
-	// Uncomment after you point a domain at Cloudflare; it needs DNS edit permission.
-	// "routes": [{ "pattern": "img.example.com", "custom_domain": true }]
 }

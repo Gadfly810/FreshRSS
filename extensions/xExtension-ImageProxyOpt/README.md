@@ -78,15 +78,18 @@ Content-Type: application/json
 
 ## 配套 Worker
 
-`worker/` 下是可直接部署的实现：`worker.js`（`caches.default` 读写 + 域名白名单 + 预热接口）、`wrangler.jsonc`（配置）。
+`worker/` 下是可直接部署的实现：`worker.js`（`caches.default` 读写 + 域名白名单 + 预热接口）、`wrangler.jsonc`（配置）、`deploy.sh`。
 
 ```sh
 cd extensions/xExtension-ImageProxyOpt/worker
-pnpx wrangler secret put IMAGE_PROXY_TOKEN   # 粘贴一串随机串，同时填进插件设置
-pnpx wrangler deploy
+echo img.example.com > domain.local            # 你的 Worker 域名，已被 .gitignore 忽略
+pnpx wrangler secret put IMAGE_PROXY_TOKEN     # 粘贴一串随机串，同时填进插件设置
+./deploy.sh
 ```
 
-两个配置项都在 `wrangler.jsonc` 的 `vars` 里，改完重新 `deploy` 即可，不用动代码：
+域名之所以不写在 `wrangler.jsonc` 里，是为了让仓库本身不暴露私有端点。代价是**不能用裸的 `wrangler deploy`**：`workers_dev` 关着又没有 routes，裸部署会解绑自定义域名，把 Worker 变成没有入口的孤儿。
+
+两个配置项都在 `wrangler.jsonc` 的 `vars` 里，改完重新 `./deploy.sh` 即可，不用动代码：
 
 | 变量 | 作用 |
 | --- | --- |
