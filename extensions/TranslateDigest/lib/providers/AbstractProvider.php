@@ -6,6 +6,7 @@
 require_once(__DIR__ . '/ITranslationProvider.php');
 require_once(__DIR__ . '/../Logger.php');
 require_once(__DIR__ . '/../TextUtil.php');
+require_once(__DIR__ . '/../HttpClient.php');
 
 abstract class AbstractProvider implements ITranslationProvider {
     
@@ -54,17 +55,6 @@ abstract class AbstractProvider implements ITranslationProvider {
     protected function makeRequest($payload, $timeout = 20) {
         $url = $this->getRequestUrl();
         $json = json_encode($payload, JSON_UNESCAPED_UNICODE);
-        $options = [
-            'http' => [
-                'method' => 'POST',
-                'header' => $this->getHeaders(),
-                'content' => $json,
-                'timeout' => $timeout,
-                'ignore_errors' => true
-            ]
-        ];
-
-        $ctx = stream_context_create($options);
 
         for ($attempt = 0; $attempt <= self::MAX_RETRY; $attempt++) {
             if ($attempt > 0) {
@@ -73,17 +63,19 @@ abstract class AbstractProvider implements ITranslationProvider {
             }
 
             try {
-                $res = @file_get_contents($url, false, $ctx);
+                $response = HttpClient::post($url, $this->getHeaders(), $json, $timeout);
             } catch (Throwable $e) {
                 Logger::exception($e, $this->getName() . ' request');
-                $res = false;
+                $response = ['ok' => false, 'status' => 0, 'body' => '', 'error' => $e->getMessage()];
             }
 
             // 网络失败：可重试
-            if ($res === false) {
-                Logger::error($this->getName() . ' request failed: ' . $url);
+            if (!$response['ok']) {
+                Logger::error($this->getName() . ' request failed: ' . $response['error'] . ' [' . $url . ']');
                 continue;
             }
+
+            $res = $response['body'];
 
             Logger::debug($this->getName() . ' raw response: ' . substr($res, 0, 500));
 
@@ -127,17 +119,6 @@ abstract class AbstractProvider implements ITranslationProvider {
      * @return array|null 响应数据
      */
     protected function httpGet($url, $headers = [], $timeout = 15) {
-        $options = [
-            'http' => [
-                'method' => 'GET',
-                'header' => $headers,
-                'timeout' => $timeout,
-                'ignore_errors' => true
-            ]
-        ];
-
-        $ctx = stream_context_create($options);
-
         for ($attempt = 0; $attempt <= self::MAX_RETRY; $attempt++) {
             if ($attempt > 0) {
                 Logger::debug($this->getName() . ' GET retry ' . $attempt . '/' . self::MAX_RETRY . ': ' . $url);
@@ -145,16 +126,18 @@ abstract class AbstractProvider implements ITranslationProvider {
             }
 
             try {
-                $res = @file_get_contents($url, false, $ctx);
+                $response = HttpClient::get($url, $headers, $timeout);
             } catch (Throwable $e) {
                 Logger::exception($e, $this->getName() . ' GET request');
-                $res = false;
+                $response = ['ok' => false, 'status' => 0, 'body' => '', 'error' => $e->getMessage()];
             }
 
-            if ($res === false) {
-                Logger::error($this->getName() . ' GET request failed: ' . $url);
+            if (!$response['ok']) {
+                Logger::error($this->getName() . ' GET request failed: ' . $response['error'] . ' [' . $url . ']');
                 continue;
             }
+
+            $res = $response['body'];
 
             Logger::debug($this->getName() . ' GET raw response: ' . substr($res, 0, 500));
 

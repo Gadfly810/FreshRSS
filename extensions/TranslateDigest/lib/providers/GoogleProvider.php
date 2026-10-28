@@ -1,6 +1,7 @@
 <?php
 require_once(__DIR__ . '/ITranslationProvider.php');
 require_once(__DIR__ . '/../Logger.php');
+require_once(__DIR__ . '/../HttpClient.php');
 
 /**
  * Google 翻译提供商（免费接口，无需 API Key）
@@ -42,21 +43,25 @@ class GoogleProvider implements ITranslationProvider {
         }
         $url = $this->baseUrl . '?' . $query;
 
-        $options = ['http' => ['method' => 'GET', 'timeout' => count($texts) > 1 ? 15 : 5]];
-        $context = stream_context_create($options);
         try {
-            $result = @file_get_contents($url, false, $context);
-            if ($result === false) {
-                return [];
-            }
-            $response = json_decode($result, true);
-            if (!is_array($response)) {
-                return [];
-            }
-            return $this->parseTranslationResponse($response, count($texts));
-        } catch (Exception $e) {
+            $response = HttpClient::get($url, [], count($texts) > 1 ? 15 : 10);
+        } catch (Throwable $e) {
+            Logger::exception($e, 'google request');
             return [];
         }
+
+        if (!$response['ok']) {
+            Logger::error('google request failed: ' . $response['error'] . ' [' . $url . ']');
+            return [];
+        }
+
+        $decoded = json_decode($response['body'], true);
+        if (!is_array($decoded)) {
+            Logger::error('google invalid JSON response (HTTP ' . $response['status'] . '): ' . substr($response['body'], 0, 200));
+            return [];
+        }
+
+        return $this->parseTranslationResponse($decoded, count($texts));
     }
 
     /**
