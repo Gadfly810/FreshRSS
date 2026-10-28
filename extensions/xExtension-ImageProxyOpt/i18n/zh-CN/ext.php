@@ -21,7 +21,7 @@ return array(
 		'warm_enabled_help' => '每篇新文章只发一次批量 POST，而不是每张图一次阻塞请求。需要代理端支持 POST。',
 		'warm_url' => '预热接口地址',
 		'warm_url_help' => 'POST 一个 JSON：{"access_token": "...", "urls": ["..."]}。留空即关闭。',
-		'warm_token' => '预热令牌',
-		'warm_token_help' => '作为 access_token 发送的共享密钥，只会发给上面的接口。',
+		'warm_token' => '共享密钥',
+		'warm_token_help' => '预热时作为 access_token 发送，同时用于给每个图片 URL 做 HMAC 签名。留空则两者都不启用，此时只有代理端的域名白名单在防护。',
 	),
 );

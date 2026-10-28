@@ -274,10 +274,15 @@ final class ImageProxyOptExtension extends Minz_Extension {
 			return $url;	// Unsupported scheme (data:, mailto:, ...).
 		}
 
+		// Signed over the *decoded* target, which is exactly what the worker reads back out of
+		// ?url=, so the signature is independent of url_encode.
+		$secret = self::str('image_proxy_opt_warm_token', self::WARM_TOKEN);
+		$sig = $secret === '' ? '' : '&sig=' . substr(hash_hmac('sha256', $url, $secret), 0, 32);
+
 		if (self::bool('image_proxy_opt_url_encode', self::URL_ENCODE)) {
 			$url = rawurlencode($url);
 		}
-		return $prefix . $url;
+		return $prefix . $url . $sig;
 	}
 
 	/**

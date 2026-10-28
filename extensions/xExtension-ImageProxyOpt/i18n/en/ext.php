@@ -21,7 +21,7 @@ return array(
 		'warm_enabled_help' => 'Sends one batched POST per new entry instead of one blocking request per image. Requires a proxy endpoint accepting POST.',
 		'warm_url' => 'Pre-warm endpoint',
 		'warm_url_help' => 'POSTed with a JSON body {"access_token": "...", "urls": ["..."]}. Leave empty to disable.',
-		'warm_token' => 'Pre-warm token',
-		'warm_token_help' => 'Shared secret sent as access_token. Only sent to the endpoint above.',
+		'warm_token' => 'Shared secret',
+		'warm_token_help' => 'Sent as access_token on the pre-warm POST, and used to HMAC-sign every proxied image URL. Leave empty to disable both — then only the proxy-side host allowlist guards the endpoint.',
 	),
 );

@@ -53,7 +53,7 @@ cp -r xExtension-ImageProxyOpt /path/to/FreshRSS/extensions/
 | 地址中包含 `http*://` | 关掉后生成 `?url=pbs.twimg.com%2Fx.jpg`（nginx 版代理需要） |
 | 对地址进行编码 | 默认开。关掉后是裸地址（部分 nginx 配置需要） |
 | 抓取时预热代理缓存 | 见下 |
-| 预热接口地址 / 预热令牌 | 见下 |
+| 预热接口地址 / 共享密钥 | 见下。共享密钥同时用于预热鉴权和图片 URL 签名 |
 
 ### 默认生成的地址
 
@@ -62,6 +62,20 @@ https://img.example.com/?url=https%3A%2F%2Fpbs.twimg.com%2Fmedia%2Fabc.jpg
 ```
 
 这个形态同时被 Cloudflare Worker、`wsrv.nl`、`images.weserv.nl` 接受。
+
+### 配了共享密钥之后
+
+会多一个 `&sig=` 参数：
+
+```
+https://img.example.com/?url=https%3A%2F%2Fpbs.twimg.com%2Fmedia%2Fabc.jpg&sig=9f2c…
+```
+
+`sig` = `substr(hash_hmac('sha256', 原始URL, 共享密钥), 0, 32)`。签名算在**解码后**的原图地址上，所以和「对地址进行编码」开关无关。
+
+签名不进缓存键（worker 的 `cacheKey()` 会把查询串重建为只有 `url=`），所以所有人共享同一份边缘缓存，不会因为签名不同而全部 miss。插件在 `entry_before_display` 里每次渲染都重算签名，不存在链接过期。
+
+作用：GET 接口从此不是开放代理 —— 拿到任意一个图片地址也没法改成取别的图。不配密钥就退化成「只有域名白名单在防护」。
 
 ## 预热（可选）
 
@@ -94,9 +108,12 @@ pnpx wrangler secret put IMAGE_PROXY_TOKEN     # 粘贴一串随机串，同时�
 | 变量 | 作用 |
 | --- | --- |
 | `ALLOWED_HOSTS` | 逗号分隔。精确域名，或 `.example.com` 表示后缀匹配 |
-| `IMAGE_PROXY_TOKEN` | 预热接口的共享密钥（用 `secret put`，不要写进 `vars`） |
+| `IMAGE_PROXY_TOKEN` | 共享密钥（用 `secret put`，不要写进 `vars`）。同时用于预热鉴权和 GET 验签 |
 
-注意：`IMAGE_PROXY_TOKEN` 缺失时预热接口会**拒绝**所有请求（fail closed），而不是放行。
+注意：
+
+- `IMAGE_PROXY_TOKEN` 缺失时，预热接口会**拒绝**所有请求（fail closed），而 GET 会**放行**（退化成只有白名单防护）。两边必须配同一个值，只配一边会 403。
+- GET 验签依赖 URL 里带 `&sig=`，所以插件设置里的「对地址进行编码」要保持开启，否则原图地址里的 `&` 会把参数截断。
 
 ## Worker 部署要点
 

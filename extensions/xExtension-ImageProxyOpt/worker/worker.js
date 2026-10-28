@@ -9,8 +9,10 @@
  * Configuration (set in wrangler.jsonc `vars`, or `wrangler secret put` for the token):
  *   ALLOWED_HOSTS       comma-separated. Exact host, or ".example.com" for a suffix match.
  *                       This list is the ONLY protection on GET, so keep it tight.
- *   IMAGE_PROXY_TOKEN   shared secret for POST. Empty/absent disables the token check,
- *                       which you should never do on a public worker.
+ *   IMAGE_PROXY_TOKEN   shared secret. Authenticates the POST pre-warm endpoint and HMAC-signs
+ *                       every GET: the extension appends &sig=<first 32 hex chars of
+ *                       HMAC-SHA256(target, secret)>. Empty disables both, leaving ALLOWED_HOSTS
+ *                       as the only guard -- so set it.
  *
  * Then in the FreshRSS extension settings:
  *   proxy_url   = https://<your-worker-domain>/?url=
@@ -81,6 +83,37 @@ async function fetchUpstream(target) {
 	});
 }
 
+function constantTimeEqual(a, b) {
+	if (a.length !== b.length) {
+		return false;
+	}
+	let diff = 0;
+	for (let i = 0; i < a.length; i++) {
+		diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+	}
+	return diff === 0;
+}
+
+// The signature deliberately stays out of the cache key (see cacheKey), so every reader shares one
+// edge copy per image regardless of which render produced the link.
+async function signatureOk(target, sig, env) {
+	const secret = env.IMAGE_PROXY_TOKEN || '';
+	if (secret === '') {
+		return true;	// Nothing configured: the host allowlist is the only guard. Do not rely on this.
+	}
+	if (sig === '') {
+		return false;
+	}
+	const key = await crypto.subtle.importKey(
+		'raw', new TextEncoder().encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+	const mac = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(target));
+	let hex = '';
+	for (const b of new Uint8Array(mac)) {
+		hex += b.toString(16).padStart(2, '0');
+	}
+	return constantTimeEqual(hex.slice(0, 32), sig);
+}
+
 function passThrough(res) {
 	const out = new Response(res.body, {
 		status: res.status,
@@ -96,6 +129,10 @@ function passThrough(res) {
 async function proxy(target, request, env, ctx) {
 	if (!/^https?:\/\//i.test(target) || !allowed(target, env)) {
 		return new Response('Forbidden host', { status: 403 });
+	}
+	const sig = new URL(request.url).searchParams.get('sig') || '';
+	if (!await signatureOk(target, sig, env)) {
+		return new Response('Forbidden signature', { status: 403 });
 	}
 
 	const key = cacheKey(request, target);
