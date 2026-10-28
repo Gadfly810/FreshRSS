@@ -76,13 +76,30 @@ Content-Type: application/json
 
 对比上游生态里的 ImageCache 插件：它是**每张图一次**同步 curl（connect 5s / total 10s），一篇 15 图的文章跨境就是 1.5~3 秒的抓取阻塞。批量版是每篇一次，且超时 2s/4s。
 
-`worker.js.example` 里有配套的 Worker 实现（含 `caches.default` 写入和 `ALLOWED_HOSTS` 白名单）。
+## 配套 Worker
+
+`worker/` 下是可直接部署的实现：`worker.js`（`caches.default` 读写 + 域名白名单 + 预热接口）、`wrangler.jsonc`（配置）。
+
+```sh
+cd extensions/xExtension-ImageProxyOpt/worker
+pnpx wrangler secret put IMAGE_PROXY_TOKEN   # 粘贴一串随机串，同时填进插件设置
+pnpx wrangler deploy
+```
+
+两个配置项都在 `wrangler.jsonc` 的 `vars` 里，改完重新 `deploy` 即可，不用动代码：
+
+| 变量 | 作用 |
+| --- | --- |
+| `ALLOWED_HOSTS` | 逗号分隔。精确域名，或 `.example.com` 表示后缀匹配 |
+| `IMAGE_PROXY_TOKEN` | 预热接口的共享密钥（用 `secret put`，不要写进 `vars`） |
+
+注意：`IMAGE_PROXY_TOKEN` 缺失时预热接口会**拒绝**所有请求（fail closed），而不是放行。
 
 ## Worker 部署要点
 
-1. **必须绑自有域名**。`*.workers.dev` 在国内经常连不上，那就白做了。
+1. **必须绑自有域名**。`*.workers.dev` 在国内经常连不上，那就白做了。绑域名需要该域名已托管在 Cloudflare，并且 token 有 DNS 编辑权限。
 2. 响应头带 `Cache-Control: public, max-age=604800, immutable`，Cloudflare 边缘会缓存，回源次数 ≈ 图片数而不是访问次数。
-3. `ALLOWED_HOSTS` 别留空 —— 开放的图片代理几天内就会被刷爆。
+3. `ALLOWED_HOSTS` 别留空 —— GET 接口没有鉴权，白名单是唯一防线，开放的图片代理几天内就会被刷爆。
 4. 建议在 Zone 里加一条 Cache Rule：`URI Path starts with /` 时 `Edge Cache TTL = 1 month`，把边缘命中率拉满。
 
 ## 已知限制

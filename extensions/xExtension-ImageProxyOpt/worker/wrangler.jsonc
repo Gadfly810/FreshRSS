@@ -1,0 +1,18 @@
+{
+	// Deploy:  pnpx wrangler deploy
+	// Token:   pnpx wrangler secret put IMAGE_PROXY_TOKEN
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "freshrss-image-proxy",
+	"main": "worker.js",
+	"compatibility_date": "2025-09-01",
+
+	// Exact host, or a ".example.com" suffix match. This list is the only protection on GET,
+	// so keep it tight -- anything you add here becomes fetchable by anyone who finds the URL.
+	"vars": {
+		"ALLOWED_HOSTS": "pbs.twimg.com,i.ytimg.com,i.imgur.com,i.redd.it,preview.redd.it,.cdninstagram.com,.fbcdn.net,.googleusercontent.com"
+	}
+
+	// Custom domain (needed in practice -- *.workers.dev is unreliable from mainland China).
+	// Uncomment after you point a domain at Cloudflare; it needs DNS edit permission.
+	// "routes": [{ "pattern": "img.example.com", "custom_domain": true }]
+}
