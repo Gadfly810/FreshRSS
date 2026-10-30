@@ -59,6 +59,12 @@ class TextUtil {
     private static $inlineTags = ['a', 'b', 'strong', 'i', 'em', 'u', 's', 'del', 'ins', 'code', 'kbd', 'var', 'sub', 'sup', 'mark', 'small', 'q', 'cite', 'abbr', 'time'];
 
     /**
+     * 非内容元素：其中的文本不参与翻译（对齐 kiss-translator 的 NON_CONTENT_SELECTOR）
+     * 只影响文本提取，原始 HTML 仍会完整保留
+     */
+    private static $nonContentTags = 'script|style|noscript|template|svg|canvas|iframe|object|video|audio|select|textarea|button';
+
+    /**
      * 从 HTML 中提取段落级文本块，并保留行内标签
      * 行内标签被换成 <a1>…</a1> 形式的占位符，翻译后再用 restoreInlineTags() 还原，
      * 这样译文仍能保留链接、粗体、代码等格式
@@ -68,8 +74,9 @@ class TextUtil {
     public static function extractRichBlocks($html) {
         $html = (string)$html;
 
-        // 去掉脚本与样式内容
-        $html = preg_replace('#<(script|style)\b[^>]*>.*?</\1>#is', ' ', $html);
+        // 去掉脚本、样式等非内容元素的整块内容
+        $html = preg_replace('#<(' . self::$nonContentTags . ')\b[^>]*>.*?</\1>#is', ' ', $html);
+        $html = preg_replace('#<(script|style)\b[^>]*/>#is', ' ', $html);
 
         // 块级标签边界与 <br> 转成换行符
         $html = preg_replace('#<br\s*/?>#i', "\n", $html);
@@ -99,7 +106,22 @@ class TextUtil {
     /**
      * 顶层块级标签集合（用于把正文切成可独立对照的片段）
      */
-    private static $blockTags = 'p|div|li|ul|ol|dl|dt|dd|h[1-6]|blockquote|tr|td|th|section|article|figure|figcaption|pre|table|hr';
+    private static $blockTags = ['p', 'div', 'li', 'ul', 'ol', 'dl', 'dt', 'dd', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'tr', 'td', 'th', 'section', 'article', 'figure', 'figcaption', 'pre', 'table', 'hr', 'header', 'footer', 'main', 'aside', 'nav', 'details', 'summary'];
+
+    /**
+     * 块级边界的匹配式：优先匹配白名单标签（常见情况，速度快），
+     * 其次匹配带 style="display:block" 这类显式块级提示的任意标签
+     */
+    private static function blockBoundaryPattern() {
+        static $pattern = null;
+        if ($pattern === null) {
+            $pattern = '#<(/?)(?:(' . implode('|', self::$blockTags) . ')\b|([a-zA-Z][a-zA-Z0-9]*)\b[^>]*style\s*=\s*["\'][^"\']*display\s*:\s*(?:block|flex|grid|list-item|table)\b[^"\']*["\'])[^>]*>#i';
+        }
+        return $pattern;
+    }
+
+    /** 递归下降的最大层数，防止异常嵌套造成无限递归 */
+    private const MAX_SPLIT_DEPTH = 8;
 
     /**
      * 把 HTML 按顶层块级标签切成片段，便于在每段原文后插入对应译文
@@ -112,7 +134,7 @@ class TextUtil {
         if (trim($html) === '') {
             return [];
         }
-        if (!preg_match_all('#<(/?)(' . self::$blockTags . ')\b([^>]*)>#i', $html, $matches, PREG_SET_ORDER | PREG_OFFSET_CAPTURE)) {
+        if (!preg_match_all(self::blockBoundaryPattern(), $html, $matches, PREG_SET_ORDER | PREG_OFFSET_CAPTURE)) {
             return [$html];
         }
 
@@ -126,11 +148,15 @@ class TextUtil {
             $rawTag = $match[0][0];
             $offset = $match[0][1];
             $closing = $match[1][0] === '/';
-            $name = strtolower($match[2][0]);
+            $name = strtolower(isset($match[2]) && $match[2][0] !== '' ? $match[2][0] : $match[3][0]);
             $selfClosing = isset($voidTags[$name]) || substr(rtrim($rawTag), -2) === '/>';
 
             if (!$closing) {
                 if ($depth === 0) {
+                    // 块级标签前的零散行内内容单独成段，避免被丢掉
+                    if ($offset > $start) {
+                        $segments[] = substr($html, $start, $offset - $start);
+                    }
                     $start = $offset;
                 }
                 if (!$selfClosing) {
@@ -160,52 +186,42 @@ class TextUtil {
     }
 
     /**
-     * 把正文拆成可逐段对照的叶子片段
-     * 先按顶层块级标签切，再对“一个容器包了多个文本块”的情况递归下降，
-     * 直到每个片段最多只含一个文本块（图片等无文本节点保持原样）
+     * 把正文拆成可逐段对照的叶子片段，同时返回每段的文本块（一次遍历，不重复提取）
+     * 一直下降到“容器内不再有多个顶层块”为止，因此 <div> 包住多段、
+     * 自定义容器 <x-article> 包住多段、<figure> 内含 figcaption 等都能逐段对照
      * @param string $html 原始 HTML
-     * @return array 原始 HTML 片段列表（按文档顺序，拼接后可还原原文）
+     * @return array 每项为 ['html' => 原始片段, 'blocks' => extractRichBlocks() 结果]
      */
     public static function splitForBilingual($html) {
-        return self::splitForBilingualRecursive((string)$html, 0);
+        $leaves = [];
+        self::collectLeaves((string)$html, 0, $leaves);
+        return $leaves;
     }
 
-    private static function splitForBilingualRecursive($html, $depth) {
+    private static function collectLeaves($html, $depth, array &$leaves) {
         if (trim($html) === '') {
-            return [];
-        }
-        if ($depth > 8) {
-            return [$html];
+            return;
         }
 
         $segments = self::splitTopLevelBlocks($html);
         if (empty($segments)) {
-            return [$html];
+            $segments = [$html];
         }
 
-        $leaves = [];
         foreach ($segments as $segment) {
             if (trim($segment) === '') {
-                $leaves[] = $segment;
+                $leaves[] = ['html' => $segment, 'blocks' => []];
                 continue;
             }
-            if (count(self::extractRichBlocks($segment)) <= 1) {
-                $leaves[] = $segment;
-                continue;
-            }
-            // 一个容器里含多个文本块，拆成「开始标签 + 子块 + 结束标签」继续下降
-            $children = self::splitContainerChildren($segment);
+            $children = $depth < self::MAX_SPLIT_DEPTH ? self::splitContainerChildren($segment) : null;
             if ($children === null) {
-                $leaves[] = $segment;
+                $leaves[] = ['html' => $segment, 'blocks' => self::extractRichBlocks($segment)];
                 continue;
             }
             foreach ($children as $child) {
-                foreach (self::splitForBilingualRecursive($child, $depth + 1) as $leaf) {
-                    $leaves[] = $leaf;
-                }
+                self::collectLeaves($child, $depth + 1, $leaves);
             }
         }
-        return $leaves;
     }
 
     /**

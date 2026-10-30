@@ -64,50 +64,55 @@ class DeepSeekProvider extends AbstractProvider {
     /**
      * 批量翻译：所有段落打包成一次请求（结构化 JSON 协议）
      */
-    public function translateBatch(array $texts, $sourceLang = 'auto', $targetLang = 'zh') {
+    /**
+     * 构造批量翻译请求（一次请求翻多段）
+     * @return array|null
+     */
+    public function prepareBatchRequest(array $texts, $sourceLang = 'auto', $targetLang = 'zh') {
         if (empty($this->apiKey) || $this->model === '' || empty($texts)) {
-            return array_fill_keys(array_keys($texts), '');
+            return null;
         }
-
-        $segments = [];
-        $keys = [];
-        $id = 0;
-        foreach ($texts as $key => $text) {
-            $text = trim((string)$text);
-            if ($text === '') {
-                continue;
-            }
-            $id++;
-            $segments[] = ['id' => $id, 'text' => $text];
-            $keys[$id] = $key;
-        }
-        if (empty($segments)) {
-            return array_fill_keys(array_keys($texts), '');
-        }
-
         $payload = [
             'model' => $this->model,
-            'messages' => $this->buildBatchMessages($segments, $targetLang),
+            'messages' => $this->buildBatchMessages($this->buildBatchSegments($texts), $targetLang),
             'temperature' => self::$payloadDefaults['translate']['temperature'],
             'max_tokens' => 4000,
             'stream' => false
         ];
 
-        $data = $this->makeRequest($payload, 60);
-        if ($data === null) {
+        return [
+            'method' => 'POST',
+            'url' => $this->getRequestUrl(),
+            'headers' => $this->getHeaders(),
+            'body' => json_encode($payload, JSON_UNESCAPED_UNICODE),
+        ];
+    }
+
+    public function translateBatch(array $texts, $sourceLang = 'auto', $targetLang = 'zh') {
+        if (empty($this->apiKey) || $this->model === '' || empty($texts)) {
             return array_fill_keys(array_keys($texts), '');
         }
 
-        $parsed = $this->parseBatchResponse($this->extractMessage($data));
+        $request = $this->prepareBatchRequest($texts, $sourceLang, $targetLang);
+        if ($request === null) {
+            return parent::translateBatch($texts, $sourceLang, $targetLang);
+        }
+
         $results = array_fill_keys(array_keys($texts), '');
+        $data = $this->requestJson($request, 60);
+        if ($data === null) {
+            return $results;
+        }
+
+        $parsed = $this->parseBatchResponse($this->extractMessage($data));
         if ($parsed === null) {
             Logger::error($this->getName() . ' batch response parse failed, falling back to per-segment');
             return $results;
         }
 
-        foreach ($keys as $segmentId => $key) {
-            if (isset($parsed[$segmentId])) {
-                $results[$key] = $this->postProcessOutput($parsed[$segmentId]);
+        foreach ($this->mapBatchById($parsed, $texts) as $key => $value) {
+            if ($value !== '') {
+                $results[$key] = $this->postProcessOutput($value);
             }
         }
         return $results;

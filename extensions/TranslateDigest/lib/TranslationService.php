@@ -1,6 +1,8 @@
 <?php
 require_once(__DIR__ . '/TextUtil.php');
 require_once(__DIR__ . '/Logger.php');
+require_once(__DIR__ . '/HttpClient.php');
+require_once(__DIR__ . '/TranslationCache.php');
 require_once(__DIR__ . '/providers/ProviderFactory.php');
 
 class TranslationService {
@@ -9,6 +11,8 @@ class TranslationService {
     const BATCH_MAX_SEGMENTS = 20;
     /** 单次批量请求的最大字符数 */
     const BATCH_MAX_CHARS = 10000;
+    /** 批量请求超时（秒），并行时多批一起等 */
+    const BATCH_TIMEOUT = 60;
 
     private $provider;
     private $targetLang;
@@ -32,6 +36,14 @@ class TranslationService {
             Logger::debug('Translation result - Service: ' . strtoupper($serviceName) . ' | Cache: MEMORY HIT | Text: ' . mb_substr($text, 0, 40));
             $usedService = $serviceName;
             return self::$cache[$cacheKey];
+        }
+
+        $persisted = TranslationCache::get($cacheKey);
+        if ($persisted !== null) {
+            Logger::debug('Translation result - Service: ' . strtoupper($serviceName) . ' | Cache: DISK HIT | Text: ' . mb_substr($text, 0, 40));
+            self::$cache[$cacheKey] = $persisted;
+            $usedService = $serviceName;
+            return $persisted;
         }
 
         $translated = null;
@@ -75,6 +87,7 @@ class TranslationService {
 
         $usedService = $actualService;
         self::$cache[$cacheKey] = $translated;
+        TranslationCache::set($cacheKey, $translated);
         return $translated;
     }
 
@@ -104,6 +117,8 @@ class TranslationService {
         $serviceName = $this->provider->getName();
         $results = [];
         $pending = [];
+        $aliases = [];        // cacheKey => 与代表项文本相同的其他 key
+        $representatives = []; // cacheKey => 实际送翻的 key
 
         foreach ($texts as $key => $text) {
             $text = trim((string)$text);
@@ -116,11 +131,23 @@ class TranslationService {
                 $results[$key] = self::$cache[$cacheKey];
                 continue;
             }
+            $persisted = TranslationCache::get($cacheKey);
+            if ($persisted !== null) {
+                self::$cache[$cacheKey] = $persisted;
+                $results[$key] = $persisted;
+                continue;
+            }
+            // 同一段文本（页脚、模板文字等）只送一次，结果回填给所有重复项
+            if (isset($representatives[$cacheKey])) {
+                $aliases[$cacheKey][] = $key;
+                continue;
+            }
+            $representatives[$cacheKey] = $key;
             $pending[$key] = ['text' => $text, 'cache' => $cacheKey];
         }
 
         if (empty($pending)) {
-            Logger::debug('Batch translation - Service: ' . strtoupper($serviceName) . ' | Cache: ALL MEMORY HIT | Segments: ' . count($texts));
+            Logger::debug('Batch translation - Service: ' . strtoupper($serviceName) . ' | Cache: ALL HIT | Segments: ' . count($texts));
             return $results;
         }
 
@@ -130,27 +157,107 @@ class TranslationService {
             . ' | Batch support: ' . ($this->provider->supportsBatch() ? 'YES' : 'NO'));
 
         $batches = $this->groupIntoBatches($pending);
+        $translations = $this->runBatches($batches);
 
         foreach ($batches as $batch) {
-            $batchTexts = [];
             foreach ($batch as $key => $item) {
-                $batchTexts[$key] = $item['text'];
-            }
-
-            $translated = $this->callProviderBatch($batchTexts);
-
-            foreach ($batch as $key => $item) {
-                $result = $translated[$key] ?? '';
+                $result = $translations[$key] ?? '';
                 if (trim((string)$result) === '') {
                     $result = $this->fallbackToGoogle($item['text']);
                 }
                 self::$cache[$item['cache']] = $result;
+                TranslationCache::set($item['cache'], $result);
                 $results[$key] = $result;
+            }
+        }
+
+        // 把重复段落的译文回填到各自的 key
+        foreach ($aliases as $cacheKey => $keys) {
+            if (!isset(self::$cache[$cacheKey])) {
+                continue;
+            }
+            foreach ($keys as $key) {
+                $results[$key] = self::$cache[$cacheKey];
             }
         }
 
         Logger::info('Batch translation done - Service: ' . strtoupper($serviceName) . ' | Segments: ' . count($pending));
         return $results;
+    }
+
+    /**
+     * 执行各批请求
+     * 能一次性构造出请求时用 curl_multi 并行发出（总耗时≈最慢的一批）；
+     * 否则退回串行，串行路径自带重试
+     * @param array $batches groupIntoBatches() 的结果
+     * @return array key => 译文（失败项缺省，由调用方兜底）
+     */
+    private function runBatches(array $batches) {
+        $translations = [];
+        if (count($batches) < 2) {
+            foreach ($batches as $batch) {
+                $translations += $this->callProviderBatch($this->extractTexts($batch));
+            }
+            return $translations;
+        }
+
+        $requests = [];
+        $batchTexts = [];
+        foreach ($batches as $index => $batch) {
+            $texts = $this->extractTexts($batch);
+            $request = $this->provider->prepareBatchRequest($texts, 'auto', $this->targetLang);
+            if ($request === null) {
+                // 有一批无法用单次请求完成，整体退回串行
+                $translations = [];
+                foreach ($batches as $serialBatch) {
+                    $translations += $this->callProviderBatch($this->extractTexts($serialBatch));
+                }
+                return $translations;
+            }
+            $requests[$index] = $request;
+            $batchTexts[$index] = $texts;
+        }
+
+        $responses = HttpClient::requestMulti($requests, self::BATCH_TIMEOUT);
+        if ($responses === null) {
+            $translations = [];
+            foreach ($batches as $serialBatch) {
+                $translations += $this->callProviderBatch($this->extractTexts($serialBatch));
+            }
+            return $translations;
+        }
+
+        Logger::info('Batch translation parallel - Service: ' . strtoupper($this->provider->getName())
+            . ' | Requests: ' . count($responses));
+
+        foreach ($batchTexts as $index => $texts) {
+            $response = $responses[$index] ?? null;
+            if ($response === null || empty($response['ok'])) {
+                $translations += $this->callProviderBatch($texts);
+                continue;
+            }
+            $data = json_decode($response['body'], true);
+            if (!is_array($data)) {
+                Logger::error('Parallel batch response is not JSON (HTTP ' . $response['status'] . '), retrying serially');
+                $translations += $this->callProviderBatch($texts);
+                continue;
+            }
+            foreach ($this->provider->parseBatchResponseData($data, $texts) as $key => $text) {
+                $translations[$key] = TextUtil::decodeNewlines($text);
+            }
+        }
+        return $translations;
+    }
+
+    /**
+     * 取出待翻译文本并做换行保护（与串行路径一致）
+     */
+    private function extractTexts(array $batch) {
+        $texts = [];
+        foreach ($batch as $key => $item) {
+            $texts[$key] = TextUtil::encodeNewlines($item['text']);
+        }
+        return $texts;
     }
 
     /**

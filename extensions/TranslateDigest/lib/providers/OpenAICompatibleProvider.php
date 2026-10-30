@@ -104,44 +104,52 @@ class OpenAICompatibleProvider extends AbstractProvider {
     /**
      * 批量翻译：所有段落打包成一次请求（结构化 JSON 协议）
      */
+    /**
+     * 构造批量翻译请求（一次请求翻多段）
+     * @return array|null
+     */
+    public function prepareBatchRequest(array $texts, $sourceLang = 'auto', $targetLang = 'zh') {
+        if ($this->model === '' || empty($texts)) {
+            return null;
+        }
+        $segments = $this->buildBatchSegments($texts);
+        $payload = $this->buildPayload($this->buildBatchMessages($segments, $targetLang), 'translate');
+        // 批量输出比单段长得多，放宽输出上限
+        $payload['max_tokens'] = 4000;
+
+        return [
+            'method' => 'POST',
+            'url' => $this->getRequestUrl(),
+            'headers' => $this->getHeaders(),
+            'body' => json_encode($payload, JSON_UNESCAPED_UNICODE),
+        ];
+    }
+
     public function translateBatch(array $texts, $sourceLang = 'auto', $targetLang = 'zh') {
         if ($this->model === '' || empty($texts)) {
             return array_fill_keys(array_keys($texts), '');
         }
 
-        $segments = [];
-        $keys = [];
-        $id = 0;
-        foreach ($texts as $key => $text) {
-            $text = trim((string)$text);
-            if ($text === '') {
-                continue;
-            }
-            $id++;
-            $segments[] = ['id' => $id, 'text' => $text];
-            $keys[$id] = $key;
-        }
-        if (empty($segments)) {
-            return array_fill_keys(array_keys($texts), '');
+        $request = $this->prepareBatchRequest($texts, $sourceLang, $targetLang);
+        if ($request === null) {
+            return parent::translateBatch($texts, $sourceLang, $targetLang);
         }
 
-        $payload = $this->buildPayload($this->buildBatchMessages($segments, $targetLang), 'translate');
-
-        $data = $this->makeRequest($payload, 60);
+        $results = array_fill_keys(array_keys($texts), '');
+        $data = $this->requestJson($request, 60);
         if ($data === null) {
-            return array_fill_keys(array_keys($texts), '');
+            return $results;
         }
 
         $parsed = $this->parseBatchResponse($this->extractMessage($data));
-        $results = array_fill_keys(array_keys($texts), '');
         if ($parsed === null) {
             Logger::error($this->getName() . ' batch response parse failed, falling back to per-segment');
             return $results;
         }
 
-        foreach ($keys as $segmentId => $key) {
-            if (isset($parsed[$segmentId])) {
-                $results[$key] = $this->postProcessOutput($parsed[$segmentId]);
+        foreach ($this->mapBatchById($parsed, $texts) as $key => $value) {
+            if ($value !== '') {
+                $results[$key] = $this->postProcessOutput($value);
             }
         }
         return $results;

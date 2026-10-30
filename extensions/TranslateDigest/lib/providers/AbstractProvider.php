@@ -53,48 +53,13 @@ abstract class AbstractProvider implements ITranslationProvider {
      * @return array|null 响应数据
      */
     protected function makeRequest($payload, $timeout = 20) {
-        $url = $this->getRequestUrl();
-        $json = json_encode($payload, JSON_UNESCAPED_UNICODE);
-
-        for ($attempt = 0; $attempt <= self::MAX_RETRY; $attempt++) {
-            if ($attempt > 0) {
-                Logger::debug($this->getName() . ' retry ' . $attempt . '/' . self::MAX_RETRY . ': ' . $url);
-                usleep(self::RETRY_INTERVAL_MS * 1000);
-            }
-
-            try {
-                $response = HttpClient::post($url, $this->getHeaders(), $json, $timeout);
-            } catch (Throwable $e) {
-                Logger::exception($e, $this->getName() . ' request');
-                $response = ['ok' => false, 'status' => 0, 'body' => '', 'error' => $e->getMessage()];
-            }
-
-            // 网络失败：可重试
-            if (!$response['ok']) {
-                Logger::error($this->getName() . ' request failed: ' . $response['error'] . ' [' . $url . ']');
-                continue;
-            }
-
-            $res = $response['body'];
-
-            Logger::debug($this->getName() . ' raw response: ' . substr($res, 0, 500));
-
-            $data = json_decode($res, true);
-            // 响应不是 JSON（网关超时页、限流页等）：可重试
-            if (!is_array($data)) {
-                Logger::error($this->getName() . ' invalid JSON response: ' . substr($res, 0, 200));
-                continue;
-            }
-
-            // 业务错误（鉴权失败、参数错误等）：重试无意义
-            if ($this->isErrorResponse($data)) {
-                return null;
-            }
-
-            return $data;
-        }
-
-        return null;
+        return $this->requestJson([
+            'method' => 'POST',
+            'url' => $this->getRequestUrl(),
+            'headers' => $this->getHeaders(),
+            'body' => json_encode($payload, JSON_UNESCAPED_UNICODE),
+            'checkError' => true,
+        ], $timeout);
     }
 
     /**
@@ -119,32 +84,66 @@ abstract class AbstractProvider implements ITranslationProvider {
      * @return array|null 响应数据
      */
     protected function httpGet($url, $headers = [], $timeout = 15) {
+        return $this->requestJson([
+            'method' => 'GET',
+            'url' => $url,
+            'headers' => $headers,
+            'body' => '',
+            'checkError' => false,
+        ], $timeout);
+    }
+
+    /**
+     * 发送一个已构造好的请求并解析 JSON，带重试
+     * 网络失败与「响应不是 JSON」（网关超时页、限流页）会重试；
+     * 业务错误（鉴权失败、参数错误）重试无意义，直接返回 null
+     * @param array $request ['method','url','headers','body','checkError']
+     * @param int $timeout 超时（秒）
+     * @return array|null 已解码的响应
+     */
+    protected function requestJson(array $request, $timeout = 20) {
+        $url = (string)($request['url'] ?? '');
+        $method = strtoupper((string)($request['method'] ?? 'POST'));
+        $headers = $request['headers'] ?? [];
+        $body = $request['body'] ?? '';
+        $checkError = $request['checkError'] ?? true;
+        $label = $method === 'GET' ? 'GET ' : '';
+
         for ($attempt = 0; $attempt <= self::MAX_RETRY; $attempt++) {
             if ($attempt > 0) {
-                Logger::debug($this->getName() . ' GET retry ' . $attempt . '/' . self::MAX_RETRY . ': ' . $url);
+                Logger::debug($this->getName() . ' ' . $label . 'retry ' . $attempt . '/' . self::MAX_RETRY . ': ' . $url);
                 usleep(self::RETRY_INTERVAL_MS * 1000);
             }
 
             try {
-                $response = HttpClient::get($url, $headers, $timeout);
+                $response = $method === 'GET'
+                    ? HttpClient::get($url, $headers, $timeout)
+                    : HttpClient::post($url, $headers, $body, $timeout);
             } catch (Throwable $e) {
-                Logger::exception($e, $this->getName() . ' GET request');
+                Logger::exception($e, $this->getName() . ' ' . $label . 'request');
                 $response = ['ok' => false, 'status' => 0, 'body' => '', 'error' => $e->getMessage()];
             }
 
+            // 网络失败：可重试
             if (!$response['ok']) {
-                Logger::error($this->getName() . ' GET request failed: ' . $response['error'] . ' [' . $url . ']');
+                Logger::error($this->getName() . ' ' . $label . 'request failed: ' . $response['error'] . ' [' . $url . ']');
                 continue;
             }
 
             $res = $response['body'];
 
-            Logger::debug($this->getName() . ' GET raw response: ' . substr($res, 0, 500));
+            Logger::debug($this->getName() . ' ' . $label . 'raw response: ' . substr($res, 0, 500));
 
             $data = json_decode($res, true);
+            // 响应不是 JSON（网关超时页、限流页等）：可重试
             if (!is_array($data)) {
-                Logger::error($this->getName() . ' GET invalid JSON response: ' . substr($res, 0, 200));
+                Logger::error($this->getName() . ' ' . $label . 'invalid JSON response (HTTP ' . $response['status'] . '): ' . substr($res, 0, 200));
                 continue;
+            }
+
+            // 业务错误（鉴权失败、参数错误等）：重试无意义
+            if ($checkError && $this->isErrorResponse($data)) {
+                return null;
             }
 
             return $data;
@@ -221,6 +220,59 @@ abstract class AbstractProvider implements ITranslationProvider {
         $results = [];
         foreach ($texts as $key => $text) {
             $results[$key] = $this->translate($text, $sourceLang, $targetLang);
+        }
+        return $results;
+    }
+
+    /**
+     * 构造批量翻译请求（只构造不发送），供并行调度使用
+     * 返回 null 表示无法用一次请求完成批量翻译
+     * @param array $texts 待翻译文本（保持原下标）
+     * @return array|null ['method' => .., 'url' => .., 'headers' => [..], 'body' => ..]
+     */
+    public function prepareBatchRequest(array $texts, $sourceLang = 'auto', $targetLang = 'zh') {
+        return null;
+    }
+
+    /**
+     * 解析批量翻译响应，返回与 $texts 同下标的译文
+     * @param array|null $data 已解码的响应
+     * @param array $texts 原始待翻译文本
+     * @return array 与 $texts 同下标的译文（失败项为 ''）
+     */
+    public function parseBatchResponseData($data, array $texts) {
+        if (!is_array($data)) {
+            return [];
+        }
+        $parsed = $this->parseBatchResponse($this->extractMessage($data));
+        if (!is_array($parsed)) {
+            return [];
+        }
+        return $this->mapBatchById($parsed, $texts);
+    }
+
+    /**
+     * 把待翻译文本编号成 [['id' => 1, 'text' => ..], ...]
+     */
+    protected function buildBatchSegments(array $texts) {
+        $segments = [];
+        $index = 0;
+        foreach ($texts as $text) {
+            $index++;
+            $segments[] = ['id' => $index, 'text' => $text];
+        }
+        return $segments;
+    }
+
+    /**
+     * 把 parseBatchResponse() 的 id 索引结果映射回 $texts 的下标
+     */
+    protected function mapBatchById(array $parsed, array $texts) {
+        $results = [];
+        $index = 0;
+        foreach ($texts as $key => $text) {
+            $index++;
+            $results[$key] = (string)($parsed[$index] ?? '');
         }
         return $results;
     }

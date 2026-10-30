@@ -14,6 +14,9 @@ class TranslateController {
 
     /** 原文长度超过该值时译文另起一行，否则同行跟在原文后（对齐 kiss-translator 的 TRANS_NEWLINE_LENGTH） */
     private const TRANSLATION_NEWLINE_LENGTH = 20;
+
+    /** 短于该长度的块视为日期、署名等零碎文本，不送翻译（节省请求） */
+    private const MIN_TRANSLATE_LENGTH = 4;
     
     public function processEntry($entry) {
         try {
@@ -185,8 +188,8 @@ class TranslateController {
             $skipIfSame = $config['TranslateSkipIfSame'];
             $maxChars = (int)$config['TokenMaxChars'];
 
-            $segments = TextUtil::splitForBilingual($content);
-            if (empty($segments)) {
+            $leaves = TextUtil::splitForBilingual($content);
+            if (empty($leaves)) {
                 Logger::debug("Feed $feedId: no segment split from content");
                 return $content;
             }
@@ -194,12 +197,14 @@ class TranslateController {
             // 先把所有待翻译的 chunk 收集起来，统一批量翻译（一次请求多段）
             $plan = [];       // segIndex => [ ['text' => .., 'tags' => .., 'keys' => [..]] ]
             $pending = [];    // "segIndex:blockIndex:chunkIndex" => 原文
-            foreach ($segments as $segIndex => $segmentHtml) {
+            foreach ($leaves as $segIndex => $leaf) {
                 $plan[$segIndex] = [];
-                foreach (TextUtil::extractRichBlocks($segmentHtml) as $blockIndex => $block) {
+                foreach ($leaf['blocks'] as $blockIndex => $block) {
                     $keys = [];
+                    // 过短的块（日期、署名、标签词等）跳过，省请求
+                    $skipped = mb_strlen($block['text']) < self::MIN_TRANSLATE_LENGTH;
                     // 已是目标语言则不再翻译
-                    if (!($skipIfSame && $this->isTargetLang($block['text'], $targetLang))) {
+                    if (!$skipped && !($skipIfSame && $this->isTargetLang($block['text'], $targetLang))) {
                         foreach (TextUtil::splitChunksBalanced($block['text'], $maxChars) as $chunkIndex => $chunk) {
                             $key = $segIndex . ':' . $blockIndex . ':' . $chunkIndex;
                             $pending[$key] = $chunk;
@@ -215,7 +220,7 @@ class TranslateController {
                 return $content;
             }
 
-            Logger::debug("Translating content for feed $feedId (service: $serviceKey, lang: $targetLang, maxChars: $maxChars, segments: " . count($segments) . ', chunks: ' . count($pending) . ')');
+            Logger::debug("Translating content for feed $feedId (service: $serviceKey, lang: $targetLang, maxChars: $maxChars, segments: " . count($leaves) . ', chunks: ' . count($pending) . ')');
 
             $translationService = new TranslationService($serviceKey, $targetLang);
             try {
@@ -227,7 +232,7 @@ class TranslateController {
 
             $output = '';
             $translatedBlocks = 0;
-            foreach ($segments as $segIndex => $segmentHtml) {
+            foreach ($leaves as $segIndex => $leaf) {
                 $translationHtml = '';
                 foreach ($plan[$segIndex] as $block) {
                     $pieces = [];
@@ -249,7 +254,7 @@ class TranslateController {
                     $translatedBlocks++;
                 }
                 // 译文插到原文段落块内部末尾，与原文同属一个段落
-                $output .= TextUtil::insertTranslationInside($segmentHtml, $translationHtml);
+                $output .= TextUtil::insertTranslationInside($leaf['html'], $translationHtml);
             }
 
             if ($translatedBlocks === 0) {

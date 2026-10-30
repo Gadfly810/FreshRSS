@@ -43,6 +43,91 @@ class HttpClient {
     }
 
     /**
+     * 发送一个已构造好的请求
+     * @param array $request ['method' => 'POST'|'GET', 'url' => .., 'headers' => [..], 'body' => ..]
+     * @param int $timeout 超时（秒）
+     * @return array{ok:bool,status:int,body:string,error:string}
+     */
+    public static function send(array $request, $timeout = self::DEFAULT_TIMEOUT) {
+        return self::request(
+            strtoupper($request['method'] ?? 'POST'),
+            $request['url'] ?? '',
+            $request['headers'] ?? [],
+            $request['body'] ?? '',
+            $timeout
+        );
+    }
+
+    /**
+     * 并行发送多个请求
+     * 长文会被分成多组、每组一次请求，串行执行时总耗时是各次之和；
+     * 这里用 curl_multi 一次性发出，总耗时约等于最慢的那一次
+     * @param array $requests 每项为 ['method','url','headers','body']
+     * @param int $timeout 单次超时（秒）
+     * @return array|null 与 $requests 同下标的响应数组；不支持并行时返回 null
+     */
+    public static function requestMulti(array $requests, $timeout = self::DEFAULT_TIMEOUT) {
+        if (empty($requests) || !function_exists('curl_multi_init')) {
+            return null;
+        }
+        $timeout = (int)$timeout > 0 ? (int)$timeout : self::DEFAULT_TIMEOUT;
+
+        $multi = curl_multi_init();
+        if ($multi === false) {
+            return null;
+        }
+
+        $handles = [];
+        foreach ($requests as $key => $request) {
+            $ch = self::createHandle(
+                strtoupper($request['method'] ?? 'POST'),
+                $request['url'] ?? '',
+                $request['headers'] ?? [],
+                $request['body'] ?? '',
+                $timeout
+            );
+            if ($ch === null) {
+                foreach ($handles as $added) {
+                    curl_multi_remove_handle($multi, $added);
+                    curl_close($added);
+                }
+                curl_multi_close($multi);
+                return null;
+            }
+            curl_multi_add_handle($multi, $ch);
+            $handles[$key] = $ch;
+        }
+
+        do {
+            $status = curl_multi_exec($multi, $active);
+            if ($active) {
+                // select 返回 -1 时没有可等待的 fd，稍等后重试即可
+                if (curl_multi_select($multi, 1.0) === -1) {
+                    usleep(10000);
+                }
+            }
+        } while ($active && $status === CURLM_OK);
+
+        $responses = [];
+        foreach ($handles as $key => $ch) {
+            $body = curl_multi_getcontent($ch);
+            $status = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            $error = curl_error($ch);
+            $errno = curl_errno($ch);
+            if ($errno !== 0 || $body === false) {
+                $responses[$key] = self::failure($error !== '' ? $error : 'curl request failed');
+            } else {
+                $responses[$key] = ['ok' => true, 'status' => $status, 'body' => (string)$body, 'error' => ''];
+            }
+            curl_multi_remove_handle($multi, $ch);
+            curl_close($ch);
+        }
+        curl_multi_close($multi);
+
+        return $responses;
+    }
+
+    /**
      * 执行请求，返回统一结构；ok 为 false 时 error 里是失败原因
      */
     private static function request($method, $url, array $headers, $body, $timeout) {
@@ -58,9 +143,31 @@ class HttpClient {
      * cURL 实现
      */
     private static function curlRequest($method, $url, array $headers, $body, $timeout) {
+        $ch = self::createHandle($method, $url, $headers, $body, $timeout);
+        if ($ch === null) {
+            return self::failure('curl_init failed');
+        }
+
+        $result = curl_exec($ch);
+        $status = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $error = curl_error($ch);
+        curl_close($ch);
+
+        if ($result === false) {
+            return self::failure($error !== '' ? $error : 'curl request failed');
+        }
+
+        return ['ok' => true, 'status' => $status, 'body' => (string)$result, 'error' => ''];
+    }
+
+    /**
+     * 创建一个已配置好的 cURL 句柄（单次与并行共用）
+     * @return CurlHandle|resource|null
+     */
+    private static function createHandle($method, $url, array $headers, $body, $timeout) {
         $ch = curl_init();
         if ($ch === false) {
-            return self::failure('curl_init failed');
+            return null;
         }
 
         $options = [
@@ -78,22 +185,13 @@ class HttpClient {
         if (defined('CURLOPT_PROTOCOLS') && defined('CURLPROTO_HTTP') && defined('CURLPROTO_HTTPS')) {
             $options[CURLOPT_PROTOCOLS] = CURLPROTO_HTTP | CURLPROTO_HTTPS;
         }
-        if ($method === 'POST') {
+        if (strtoupper($method) === 'POST') {
             $options[CURLOPT_POST] = true;
             $options[CURLOPT_POSTFIELDS] = $body;
         }
 
         curl_setopt_array($ch, $options);
-        $result = curl_exec($ch);
-        $status = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        $error = curl_error($ch);
-        curl_close($ch);
-
-        if ($result === false) {
-            return self::failure($error !== '' ? $error : 'curl request failed');
-        }
-
-        return ['ok' => true, 'status' => $status, 'body' => (string)$result, 'error' => ''];
+        return $ch;
     }
 
     /**

@@ -135,12 +135,9 @@ class GoogleProvider implements ITranslationProvider {
     }
 
     /**
-     * 发出 GET 请求并解析响应
-     * @param string $endpoint 接口地址
-     * @param string $client client 参数值
-     * @return array 与 $texts 同下标的译文数组，失败返回空数组
+     * 构造批量请求参数串
      */
-    private function fetchAndParse($endpoint, $client, array $texts, $sourceLang, $targetLang) {
+    private function buildQuery($endpoint, $client, array $texts, $sourceLang, $targetLang) {
         $params = ['client' => $client, 'sl' => $sourceLang, 'tl' => $targetLang];
         if ($endpoint === self::ENDPOINT_LEGACY) {
             $params['dt'] = 't';
@@ -149,7 +146,17 @@ class GoogleProvider implements ITranslationProvider {
         foreach ($texts as $text) {
             $query .= '&q=' . urlencode((string)$text);
         }
-        $url = $endpoint . '?' . $query;
+        return $query;
+    }
+
+    /**
+     * 发出 GET 请求并解析响应
+     * @param string $endpoint 接口地址
+     * @param string $client client 参数值
+     * @return array 与 $texts 同下标的译文数组，失败返回空数组
+     */
+    private function fetchAndParse($endpoint, $client, array $texts, $sourceLang, $targetLang) {
+        $url = $endpoint . '?' . $this->buildQuery($endpoint, $client, $texts, $sourceLang, $targetLang);
 
         try {
             $response = HttpClient::get($url, [], count($texts) > 1 ? 15 : 10);
@@ -252,6 +259,64 @@ class GoogleProvider implements ITranslationProvider {
 
     public function supportsBatch() {
         return true;
+    }
+
+    /**
+     * 构造批量请求
+     * 一次 GET 能装下所有文本时才返回请求（否则交给串行路径内部切片）
+     * @return array|null
+     */
+    public function prepareBatchRequest(array $texts, $sourceLang = 'auto', $targetLang = 'zh') {
+        if (empty($texts)) {
+            return null;
+        }
+
+        $ordered = [];
+        $bytes = 0;
+        foreach ($texts as $text) {
+            $cost = $this->encodedCost($text);
+            // 单段就超 URL 上限时需要切片，交给串行路径
+            if ($cost > self::MAX_QUERY_BYTES) {
+                return null;
+            }
+            $bytes += $cost;
+            $ordered[] = $text;
+        }
+        if ($bytes > self::MAX_QUERY_BYTES) {
+            return null;
+        }
+
+        $query = $this->buildQuery(self::ENDPOINT_PRIMARY, 'dict-chrome-ex', $ordered, $sourceLang, $targetLang);
+
+        return [
+            'method' => 'GET',
+            'url' => self::ENDPOINT_PRIMARY . '?' . $query,
+            'headers' => [],
+            'body' => '',
+        ];
+    }
+
+    /**
+     * 解析批量响应（新接口按 q 顺序返回）
+     */
+    public function parseBatchResponseData($data, array $texts) {
+        if (!is_array($data)) {
+            return [];
+        }
+
+        $parsed = $this->parseTranslationResponse($data, count($texts));
+        if (count($parsed) !== count($texts)) {
+            Logger::error('google batch response could not be mapped per segment (' . count($texts) . ' segments)');
+            return [];
+        }
+
+        $results = [];
+        $index = 0;
+        foreach ($texts as $key => $text) {
+            $results[$key] = (string)$parsed[$index];
+            $index++;
+        }
+        return $results;
     }
 
     /**

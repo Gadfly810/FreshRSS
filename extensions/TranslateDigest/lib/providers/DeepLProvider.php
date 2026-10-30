@@ -123,6 +123,58 @@ class DeepLProvider extends AbstractProvider {
     }
 
     /**
+     * 构造批量翻译请求
+     * 旧版 DeepLX 只收单段文本，返回 null 让调用方走串行
+     * @return array|null
+     */
+    public function prepareBatchRequest(array $texts, $sourceLang = 'auto', $targetLang = 'zh') {
+        if (empty($texts) || $this->isLegacyDeepLX()) {
+            return null;
+        }
+
+        $payloadTexts = [];
+        foreach ($texts as $text) {
+            $payloadTexts[] = trim((string)$text);
+        }
+
+        $payload = [
+            'text' => $payloadTexts,
+            'target_lang' => $this->mapLang($targetLang, true)
+        ];
+        $src = $this->mapLang($sourceLang, false);
+        if ($src !== '') {
+            $payload['source_lang'] = $src;
+        }
+
+        return [
+            'method' => 'POST',
+            'url' => $this->getRequestUrl(),
+            'headers' => $this->getHeaders(),
+            'body' => json_encode($payload, JSON_UNESCAPED_UNICODE),
+        ];
+    }
+
+    /**
+     * 解析官方批量响应：translations 按 text 数组顺序返回
+     */
+    public function parseBatchResponseData($data, array $texts) {
+        if (!is_array($data) || empty($data['translations']) || !is_array($data['translations'])) {
+            Logger::error($this->getName() . ' native batch response has no translations');
+            return [];
+        }
+
+        $results = [];
+        $index = 0;
+        foreach ($texts as $key => $text) {
+            $results[$key] = isset($data['translations'][$index]['text'])
+                ? $this->postProcessOutput($data['translations'][$index]['text'])
+                : '';
+            $index++;
+        }
+        return $results;
+    }
+
+    /**
      * 批量翻译
      * 官方 /v2/translate 原生支持 text 数组，一次请求返回多个译文；
      * 旧版 DeepLX 只收单段文本，降级为逐段调用
@@ -132,49 +184,18 @@ class DeepLProvider extends AbstractProvider {
             return [];
         }
 
-        if ($this->isLegacyDeepLX()) {
+        $request = $this->prepareBatchRequest($texts, $sourceLang, $targetLang);
+        if ($request === null) {
             return parent::translateBatch($texts, $sourceLang, $targetLang);
         }
 
-        return $this->translateBatchNative($texts, $this->mapLang($targetLang, true), $this->mapLang($sourceLang, false));
-    }
-
-    /**
-     * 官方 DeepL API 的原生批量（text 为数组，译文按顺序返回）
-     */
-    private function translateBatchNative(array $texts, $target, $src) {
-        $orderedKeys = array_keys($texts);
-        $payloadTexts = [];
-        foreach ($orderedKeys as $key) {
-            $payloadTexts[] = trim((string)$texts[$key]);
-        }
-        if (empty($payloadTexts)) {
-            return array_fill_keys($orderedKeys, '');
-        }
-
-        $payload = [
-            'text' => $payloadTexts,
-            'target_lang' => $target
-        ];
-        if ($src !== '') {
-            $payload['source_lang'] = $src;
-        }
-
-        $data = $this->makeRequest($payload, 60);
-        $results = array_fill_keys($orderedKeys, '');
-        if ($data === null || empty($data['translations']) || !is_array($data['translations'])) {
-            Logger::error($this->getName() . ' native batch response has no translations');
+        $results = array_fill_keys(array_keys($texts), '');
+        $data = $this->requestJson($request, 60);
+        if ($data === null) {
             return $results;
         }
 
-        $i = 0;
-        foreach ($orderedKeys as $key) {
-            if (isset($data['translations'][$i]['text'])) {
-                $results[$key] = $this->postProcessOutput($data['translations'][$i]['text']);
-            }
-            $i++;
-        }
-        return $results;
+        return $this->parseBatchResponseData($data, $texts) + $results;
     }
 
     /**
