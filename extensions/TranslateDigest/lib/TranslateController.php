@@ -5,6 +5,13 @@ require_once('TextUtil.php');
 require_once('Logger.php');
 
 class TranslateController {
+
+    /** 译文块样式：对齐 kiss-translator 的「普通下划线」译文风格（DEFAULT_COLOR = #209CEE） */
+    private const TRANSLATION_BLOCK_STYLE = 'margin:0.15em 0 1em;'
+        . 'text-decoration-line:underline;text-decoration-style:solid;text-decoration-color:#209CEE;'
+        . 'text-decoration-thickness:1px;text-underline-offset:0.3em;'
+        . '-webkit-text-decoration-line:underline;-webkit-text-decoration-style:solid;'
+        . '-webkit-text-decoration-color:#209CEE;-webkit-text-underline-offset:0.3em;';
     
     public function processEntry($entry) {
         try {
@@ -47,17 +54,19 @@ class TranslateController {
             // 正文只取一次（标题修改不影响正文）
             $originalContent = $entry->content();
 
-            // 生成两个块，最后一次性拼接到原文前，避免互相污染
-            $blocks = '';
+            // 摘要块放在最前；正文按「原文 - 译文」逐段对照
+            $newContent = $originalContent;
             if ($contentTranslationEnabled) {
-                $blocks .= $this->buildContentTranslationBlock($originalContent, $config, $feedId);
+                $newContent = $this->buildInterleavedContent($originalContent, $config, $feedId);
             }
+
+            $blocks = '';
             if ($summarizeEnabled) {
                 $blocks .= $this->buildSummaryBlock($originalContent, $config, $feedId);
             }
 
-            if ($blocks !== '') {
-                $entry->_content($blocks . $originalContent);
+            if ($blocks !== '' || $newContent !== $originalContent) {
+                $entry->_content($blocks . $newContent);
             }
             
             return $entry;
@@ -159,14 +168,14 @@ class TranslateController {
     }
 
     /**
-     * 生成正文翻译块 HTML（双语显示：译文块在前，原文完整保留在后）
-     * 长文本按段落切块，每块再按句末标点分段翻译后拼接
+     * 生成对照式双语正文：每段原文之后紧跟该段译文
+     * 原文保留原始 HTML（图片、列表等不被破坏），译文只保留文字与行内标签
      */
-    private function buildContentTranslationBlock($content, $config, $feedId) {
+    private function buildInterleavedContent($content, $config, $feedId) {
         try {
             if (empty($content)) {
                 Logger::debug("Feed $feedId: no content to translate");
-                return '';
+                return $content;
             }
 
             $serviceKey = $config['TranslateDefaultService'];
@@ -174,87 +183,80 @@ class TranslateController {
             $skipIfSame = $config['TranslateSkipIfSame'];
             $maxChars = (int)$config['TokenMaxChars'];
 
-            $blocks = TextUtil::extractRichBlocks($content);
-            if (empty($blocks)) {
-                Logger::debug("Feed $feedId: no text block extracted from content");
-                return '';
+            $segments = TextUtil::splitTopLevelBlocks($content);
+            if (empty($segments)) {
+                Logger::debug("Feed $feedId: no segment split from content");
+                return $content;
             }
-
-            Logger::debug("Translating content for feed $feedId (service: $serviceKey, lang: $targetLang, maxChars: $maxChars, blocks: " . count($blocks) . ')');
 
             // 先把所有待翻译的 chunk 收集起来，统一批量翻译（一次请求多段）
-            $blockChunks = [];   // blockIndex => chunkIndex[]
-            $pending = [];       // "blockIndex:chunkIndex" => 原文
-            foreach ($blocks as $blockIndex => $block) {
-                // 已是目标语言则原样保留
-                if ($skipIfSame && $this->isTargetLang($block['text'], $targetLang)) {
-                    $blockChunks[$blockIndex] = null;
-                    continue;
-                }
-                $chunks = TextUtil::splitChunksBalanced($block['text'], $maxChars);
-                if (empty($chunks)) {
-                    $blockChunks[$blockIndex] = [];
-                    continue;
-                }
-                $blockChunks[$blockIndex] = $chunks;
-                foreach ($chunks as $chunkIndex => $chunk) {
-                    $pending[$blockIndex . ':' . $chunkIndex] = $chunk;
-                }
-            }
-
-            $translatedChunks = [];
-            if (!empty($pending)) {
-                $translationService = new TranslationService($serviceKey, $targetLang);
-                try {
-                    $translatedChunks = $translationService->translateBatch($pending);
-                } catch (Exception $e) {
-                    Logger::exception($e, 'Content batch translation');
-                    $translatedChunks = [];
+            $plan = [];       // segIndex => [ ['tags' => .., 'keys' => [..]] ]
+            $pending = [];    // "segIndex:blockIndex:chunkIndex" => 原文
+            foreach ($segments as $segIndex => $segmentHtml) {
+                $plan[$segIndex] = [];
+                foreach (TextUtil::extractRichBlocks($segmentHtml) as $blockIndex => $block) {
+                    $keys = [];
+                    // 已是目标语言则不再翻译
+                    if (!($skipIfSame && $this->isTargetLang($block['text'], $targetLang))) {
+                        foreach (TextUtil::splitChunksBalanced($block['text'], $maxChars) as $chunkIndex => $chunk) {
+                            $key = $segIndex . ':' . $blockIndex . ':' . $chunkIndex;
+                            $pending[$key] = $chunk;
+                            $keys[] = $key;
+                        }
+                    }
+                    $plan[$segIndex][] = ['tags' => $block['tags'], 'keys' => $keys];
                 }
             }
 
-            $translatedBlocks = [];
-            $translatedCount = 0;
-            foreach ($blocks as $blockIndex => $block) {
-                // 已是目标语言，原样保留
-                if (isset($blockChunks[$blockIndex]) && $blockChunks[$blockIndex] === null) {
-                    $translatedBlocks[] = $block;
-                    continue;
-                }
-                $chunks = $blockChunks[$blockIndex] ?? [];
-                $parts = [];
-                foreach ($chunks as $chunkIndex => $chunk) {
-                    $key = $blockIndex . ':' . $chunkIndex;
-                    // 翻译失败或返回空时保留原文，避免丢内容
-                    $parts[] = empty($translatedChunks[$key]) ? $chunk : $translatedChunks[$key];
-                }
-                $translatedBlock = trim(implode(' ', $parts));
-                if ($translatedBlock !== '') {
-                    $translatedBlocks[] = ['text' => $translatedBlock, 'tags' => $block['tags']];
-                    $translatedCount++;
+            if (empty($pending)) {
+                Logger::debug("Feed $feedId: nothing to translate in content");
+                return $content;
+            }
+
+            Logger::debug("Translating content for feed $feedId (service: $serviceKey, lang: $targetLang, maxChars: $maxChars, segments: " . count($segments) . ', chunks: ' . count($pending) . ')');
+
+            $translationService = new TranslationService($serviceKey, $targetLang);
+            try {
+                $translated = $translationService->translateBatch($pending);
+            } catch (Exception $e) {
+                Logger::exception($e, 'Content batch translation');
+                $translated = [];
+            }
+
+            $output = '';
+            $translatedBlocks = 0;
+            foreach ($segments as $segIndex => $segmentHtml) {
+                // 原文原样输出
+                $output .= $segmentHtml;
+                foreach ($plan[$segIndex] as $block) {
+                    $pieces = [];
+                    foreach ($block['keys'] as $key) {
+                        $piece = trim((string)($translated[$key] ?? ''));
+                        if ($piece !== '') {
+                            $pieces[] = $piece;
+                        }
+                    }
+                    if (empty($pieces)) {
+                        continue;
+                    }
+                    // 还原行内标签（链接、粗体、代码等），其余文本会被转义
+                    $output .= '<div class="td-translation" style="' . self::TRANSLATION_BLOCK_STYLE . '">'
+                        . TextUtil::restoreInlineTags(implode(' ', $pieces), $block['tags'])
+                        . '</div>';
+                    $translatedBlocks++;
                 }
             }
 
-            if ($translatedCount === 0 || empty($translatedBlocks)) {
+            if ($translatedBlocks === 0) {
                 Logger::debug("Feed $feedId: content translation produced nothing, skipping");
-                return '';
+                return $content;
             }
 
-            $paragraphs = '';
-            foreach ($translatedBlocks as $block) {
-                // 还原行内标签（链接、粗体、代码等），其余文本会被转义
-                $paragraphs .= '<p style="margin:0 0 0.6em;">' . TextUtil::restoreInlineTags($block['text'], $block['tags']) . '</p>';
-            }
-
-            Logger::debug('Added content translation: ' . mb_substr(implode(' ', array_column($translatedBlocks, 'text')), 0, 40));
-            return '<div style="margin:0 0 1em;padding:0.8em 1em;border-left:4px solid #2b7de9;'
-                . 'background:#f2f7ff;border-radius:3px;color:#1a3d6d;">'
-                . '<p style="margin:0 0 0.6em;"><em>🌐 译文（' . strtoupper($targetLang) . '）：</em></p>'
-                . $paragraphs
-                . '</div>';
+            Logger::debug("Added bilingual content for feed $feedId: $translatedBlocks segment(s)");
+            return $output;
         } catch (Exception $e) {
             Logger::exception($e, 'Content translation for feed: ' . $feedId);
-            return '';
+            return $content;
         }
     }
 

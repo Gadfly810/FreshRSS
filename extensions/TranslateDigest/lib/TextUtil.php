@@ -97,6 +97,69 @@ class TextUtil {
     }
 
     /**
+     * 顶层块级标签集合（用于把正文切成可独立对照的片段）
+     */
+    private static $blockTags = 'p|div|li|ul|ol|dl|dt|dd|h[1-6]|blockquote|tr|td|th|section|article|figure|figcaption|pre|table|hr';
+
+    /**
+     * 把 HTML 按顶层块级标签切成片段，便于在每段原文后插入对应译文
+     * 片段保留原始 HTML（含图片等非文本内容），未被块级标签包裹的零散内容原样保留
+     * @param string $html 原始 HTML
+     * @return array 原始 HTML 片段列表（按文档顺序）
+     */
+    public static function splitTopLevelBlocks($html) {
+        $html = (string)$html;
+        if (trim($html) === '') {
+            return [];
+        }
+        if (!preg_match_all('#<(/?)(' . self::$blockTags . ')\b([^>]*)>#i', $html, $matches, PREG_SET_ORDER | PREG_OFFSET_CAPTURE)) {
+            return [$html];
+        }
+
+        $voidTags = ['hr' => true];
+        $segments = [];
+        $depth = 0;
+        $start = 0;
+        $length = strlen($html);
+
+        foreach ($matches as $match) {
+            $rawTag = $match[0][0];
+            $offset = $match[0][1];
+            $closing = $match[1][0] === '/';
+            $name = strtolower($match[2][0]);
+            $selfClosing = isset($voidTags[$name]) || substr(rtrim($rawTag), -2) === '/>';
+
+            if (!$closing) {
+                if ($depth === 0) {
+                    $start = $offset;
+                }
+                if (!$selfClosing) {
+                    $depth++;
+                }
+            } else {
+                $depth = max(0, $depth - 1);
+            }
+
+            if ($depth === 0) {
+                $end = $offset + strlen($rawTag);
+                $segments[] = substr($html, $start, $end - $start);
+                $start = $end;
+            }
+        }
+
+        if ($start < $length) {
+            $tail = substr($html, $start);
+            if (trim($tail) === '' && !empty($segments)) {
+                $segments[count($segments) - 1] .= $tail;
+            } else {
+                $segments[] = $tail;
+            }
+        }
+
+        return $segments;
+    }
+
+    /**
      * 把一段 HTML 中的行内标签换成占位符，返回纯文本与标签映射
      * @param string $html 单块 HTML
      * @return array ['text' => string, 'tags' => array]
