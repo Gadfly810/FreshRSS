@@ -160,6 +160,104 @@ class TextUtil {
     }
 
     /**
+     * 把正文拆成可逐段对照的叶子片段
+     * 先按顶层块级标签切，再对“一个容器包了多个文本块”的情况递归下降，
+     * 直到每个片段最多只含一个文本块（图片等无文本节点保持原样）
+     * @param string $html 原始 HTML
+     * @return array 原始 HTML 片段列表（按文档顺序，拼接后可还原原文）
+     */
+    public static function splitForBilingual($html) {
+        return self::splitForBilingualRecursive((string)$html, 0);
+    }
+
+    private static function splitForBilingualRecursive($html, $depth) {
+        if (trim($html) === '') {
+            return [];
+        }
+        if ($depth > 8) {
+            return [$html];
+        }
+
+        $segments = self::splitTopLevelBlocks($html);
+        if (empty($segments)) {
+            return [$html];
+        }
+
+        $leaves = [];
+        foreach ($segments as $segment) {
+            if (trim($segment) === '') {
+                $leaves[] = $segment;
+                continue;
+            }
+            if (count(self::extractRichBlocks($segment)) <= 1) {
+                $leaves[] = $segment;
+                continue;
+            }
+            // 一个容器里含多个文本块，拆成「开始标签 + 子块 + 结束标签」继续下降
+            $children = self::splitContainerChildren($segment);
+            if ($children === null) {
+                $leaves[] = $segment;
+                continue;
+            }
+            foreach ($children as $child) {
+                foreach (self::splitForBilingualRecursive($child, $depth + 1) as $leaf) {
+                    $leaves[] = $leaf;
+                }
+            }
+        }
+        return $leaves;
+    }
+
+    /**
+     * 把一个容器元素拆成「开始标签 + 直接子块 + 结束标签」
+     * 拆不开（不是单元素包裹、或子块只有 1 个）时返回 null
+     */
+    private static function splitContainerChildren($segment) {
+        if (!preg_match('#^\s*<([a-zA-Z][a-zA-Z0-9]*)\b[^>]*>#', $segment, $match)) {
+            return null;
+        }
+        $openTag = $match[0];
+        $closeTag = '</' . strtolower($match[1]) . '>';
+        $innerStart = strlen($openTag);
+        $innerEnd = strrpos($segment, $closeTag);
+        if ($innerEnd === false || $innerEnd < $innerStart) {
+            return null;
+        }
+        $inner = substr($segment, $innerStart, $innerEnd - $innerStart);
+        $suffix = substr($segment, $innerEnd);
+        $children = self::splitTopLevelBlocks($inner);
+        if (count($children) <= 1) {
+            return null;
+        }
+        array_unshift($children, $openTag);
+        $children[] = $suffix;
+        return $children;
+    }
+
+    /**
+     * 把译文插到片段的块级元素内部末尾（对齐 kiss-translator 的插入位置，
+     * 译文与原文同属一个段落块，不会在两者之间多出一个段间距）
+     * 片段不是完整元素时直接追加在后面
+     * @param string $segment 原文片段
+     * @param string $translationHtml 译文 HTML
+     * @return string
+     */
+    public static function insertTranslationInside($segment, $translationHtml) {
+        if ($translationHtml === '') {
+            return $segment;
+        }
+        if (!preg_match('#^\s*<([a-zA-Z][a-zA-Z0-9]*)\b[^>]*>#', $segment, $match)) {
+            return $segment . $translationHtml;
+        }
+        $closeTag = '</' . strtolower($match[1]) . '>';
+        $position = strrpos($segment, $closeTag);
+        if ($position === false) {
+            return $segment . $translationHtml;
+        }
+        return substr($segment, 0, $position) . $translationHtml . substr($segment, $position);
+    }
+
+    /**
      * 把一段 HTML 中的行内标签换成占位符，返回纯文本与标签映射
      * @param string $html 单块 HTML
      * @return array ['text' => string, 'tags' => array]

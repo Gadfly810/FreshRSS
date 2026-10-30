@@ -6,12 +6,14 @@ require_once('Logger.php');
 
 class TranslateController {
 
-    /** 译文块样式：对齐 kiss-translator 的「普通下划线」译文风格（DEFAULT_COLOR = #209CEE） */
-    private const TRANSLATION_BLOCK_STYLE = 'margin:0.15em 0 1em;'
-        . 'text-decoration-line:underline;text-decoration-style:solid;text-decoration-color:#209CEE;'
-        . 'text-decoration-thickness:1px;text-underline-offset:0.3em;'
+    /** 译文样式：对齐 kiss-translator 的「普通下划线」译文风格（DEFAULT_COLOR = #209CEE） */
+    private const TRANSLATION_SPAN_STYLE = 'text-decoration-line:underline;text-decoration-style:solid;'
+        . 'text-decoration-color:#209CEE;text-decoration-thickness:1px;text-underline-offset:0.3em;'
         . '-webkit-text-decoration-line:underline;-webkit-text-decoration-style:solid;'
         . '-webkit-text-decoration-color:#209CEE;-webkit-text-underline-offset:0.3em;';
+
+    /** 原文长度超过该值时译文另起一行，否则同行跟在原文后（对齐 kiss-translator 的 TRANS_NEWLINE_LENGTH） */
+    private const TRANSLATION_NEWLINE_LENGTH = 20;
     
     public function processEntry($entry) {
         try {
@@ -183,14 +185,14 @@ class TranslateController {
             $skipIfSame = $config['TranslateSkipIfSame'];
             $maxChars = (int)$config['TokenMaxChars'];
 
-            $segments = TextUtil::splitTopLevelBlocks($content);
+            $segments = TextUtil::splitForBilingual($content);
             if (empty($segments)) {
                 Logger::debug("Feed $feedId: no segment split from content");
                 return $content;
             }
 
             // 先把所有待翻译的 chunk 收集起来，统一批量翻译（一次请求多段）
-            $plan = [];       // segIndex => [ ['tags' => .., 'keys' => [..]] ]
+            $plan = [];       // segIndex => [ ['text' => .., 'tags' => .., 'keys' => [..]] ]
             $pending = [];    // "segIndex:blockIndex:chunkIndex" => 原文
             foreach ($segments as $segIndex => $segmentHtml) {
                 $plan[$segIndex] = [];
@@ -204,7 +206,7 @@ class TranslateController {
                             $keys[] = $key;
                         }
                     }
-                    $plan[$segIndex][] = ['tags' => $block['tags'], 'keys' => $keys];
+                    $plan[$segIndex][] = ['text' => $block['text'], 'tags' => $block['tags'], 'keys' => $keys];
                 }
             }
 
@@ -226,8 +228,7 @@ class TranslateController {
             $output = '';
             $translatedBlocks = 0;
             foreach ($segments as $segIndex => $segmentHtml) {
-                // 原文原样输出
-                $output .= $segmentHtml;
+                $translationHtml = '';
                 foreach ($plan[$segIndex] as $block) {
                     $pieces = [];
                     foreach ($block['keys'] as $key) {
@@ -239,12 +240,16 @@ class TranslateController {
                     if (empty($pieces)) {
                         continue;
                     }
-                    // 还原行内标签（链接、粗体、代码等），其余文本会被转义
-                    $output .= '<div class="td-translation" style="' . self::TRANSLATION_BLOCK_STYLE . '">'
+                    // 长段另起一行，短段（如标题）同行跟在原文后
+                    $separator = mb_strlen($block['text']) > self::TRANSLATION_NEWLINE_LENGTH ? '<br>' : ' ';
+                    $translationHtml .= $separator
+                        . '<span class="td-translation" style="' . self::TRANSLATION_SPAN_STYLE . '">'
                         . TextUtil::restoreInlineTags(implode(' ', $pieces), $block['tags'])
-                        . '</div>';
+                        . '</span>';
                     $translatedBlocks++;
                 }
+                // 译文插到原文段落块内部末尾，与原文同属一个段落
+                $output .= TextUtil::insertTranslationInside($segmentHtml, $translationHtml);
             }
 
             if ($translatedBlocks === 0) {
