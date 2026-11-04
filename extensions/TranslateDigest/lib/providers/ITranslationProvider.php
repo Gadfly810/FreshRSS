@@ -20,4 +20,16 @@ interface ITranslationProvider {
      * @return array 与 $texts 同下标的译文数组；失败项为 ''（由调用方回落原文）
      */
     public function translateBatch(array $texts, $sourceLang = 'auto', $targetLang = 'zh');
+
+    /**
+     * 是否遇到了短期内不会自愈的错误（额度耗尽、鉴权失败）
+     * 调用方据此在本次运行内熔断该服务，直接走兜底
+     */
+    public function hasFatalError();
+
+    /**
+     * 最近一次业务错误原因，用于写日志说明为什么回落
+     * @return string 空串表示没有错误
+     */
+    public function getLastErrorReason();
 }

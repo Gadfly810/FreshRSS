@@ -18,6 +18,9 @@ class TranslationService {
     private $targetLang;
     private static $cache = [];
 
+    /** 本次运行内已遇永久错误（额度耗尽、鉴权失败）的服务，后续直接走兜底 */
+    private static $brokenServices = [];
+
     public function __construct($serviceKey, $targetLang = null) {
         $this->targetLang = $targetLang ?: (FreshRSS_Context::$user_conf->TranslateTargetLang ?? 'zh');
         $this->provider = ProviderFactory::create($serviceKey);
@@ -53,10 +56,14 @@ class TranslationService {
         Logger::debug('Text to translate: ' . mb_substr($text, 0, 50));
 
         try {
+            if ($this->isProviderBroken()) {
+                throw new RuntimeException('service disabled in this run');
+            }
             $translated = $this->provider->translate(TextUtil::encodeNewlines($text), 'auto', $this->targetLang);
             $translated = TextUtil::decodeNewlines($translated);
 
             if (empty($translated)) {
+                $this->trackFatalError();
                 if ($serviceName !== 'google') {
                     Logger::info('Translation API call to ' . strtoupper($serviceName) . ' returned empty');
                     $translated = $this->fallbackToGoogle($text);
@@ -67,15 +74,14 @@ class TranslationService {
             } else {
                 Logger::info('Translation API call - Service: ' . strtoupper($serviceName) . ' | Result: ' . mb_substr($translated, 0, 50));
             }
-        } catch (Exception $e) {
+        } catch (Throwable $e) {
             Logger::exception($e, 'Translation with ' . strtoupper($serviceName));
 
             if ($serviceName !== 'google') {
                 try {
                     $translated = $this->fallbackToGoogle($text);
                     $actualService = 'google';
-                    Logger::info('Translation fallback to Google due to error - Service: GOOGLE');
-                } catch (Exception $fallbackErr) {
+                } catch (Throwable $fallbackErr) {
                     Logger::exception($fallbackErr, 'Fallback translation to Google');
                     $translated = $text;
                 }
@@ -94,12 +100,69 @@ class TranslationService {
     /**
      * 回落到 Google 翻译，失败时返回原文
      */
+    /**
+     * 单段兜底：主服务失败时改用 Google
+     * 日志写清主服务的失败原因，便于从日志直接定位（如额度耗尽）
+     */
     private function fallbackToGoogle($text) {
+        $reason = $this->primaryFailureReason();
         $fallback = ProviderFactory::create('google');
         $result = $fallback->translate(TextUtil::encodeNewlines($text), 'auto', $this->targetLang);
         $result = TextUtil::decodeNewlines($result) ?: $text;
-        Logger::info('Translation fallback - Service: GOOGLE | Result: ' . mb_substr($result, 0, 50));
+        Logger::info('Translation fallback - Service: GOOGLE | Reason: ' . $reason . ' | Result: ' . mb_substr($result, 0, 50));
         return $result;
+    }
+
+    /**
+     * 批量兜底：把所有失败段一次性交给 Google 批量接口
+     * 逐段发请求会变成几十次串行请求，是长文翻不动的主因
+     * @param array $failed key => ['text' => .., 'cache' => ..]
+     * @return array key => 译文（仍失败的段回落原文）
+     */
+    private function fallbackToGoogleBatch(array $failed) {
+        $reason = $this->primaryFailureReason();
+        $fallback = ProviderFactory::create('google');
+        $results = [];
+
+        $buffer = [];
+        $bufferChars = 0;
+        foreach ($failed as $key => $item) {
+            $length = mb_strlen($item['text']);
+            if (!empty($buffer) && (count($buffer) >= self::BATCH_MAX_SEGMENTS || $bufferChars + $length > self::BATCH_MAX_CHARS)) {
+                $this->flushFallbackChunk($fallback, $buffer, $results);
+                $buffer = [];
+                $bufferChars = 0;
+            }
+            $buffer[$key] = $item;
+            $bufferChars += $length;
+        }
+        $this->flushFallbackChunk($fallback, $buffer, $results);
+
+        Logger::info('Translation fallback - Service: GOOGLE | Reason: ' . $reason . ' | Segments: ' . count($failed));
+        return $results;
+    }
+
+    /**
+     * 发送一批兜底翻译，失败项回落原文
+     */
+    private function flushFallbackChunk($fallback, array $buffer, array &$results) {
+        if (empty($buffer)) {
+            return;
+        }
+        $texts = [];
+        foreach ($buffer as $key => $item) {
+            $texts[$key] = TextUtil::encodeNewlines($item['text']);
+        }
+        try {
+            $translated = $fallback->translateBatch($texts, 'auto', $this->targetLang) ?: [];
+        } catch (Throwable $e) {
+            Logger::exception($e, 'Fallback batch translation to Google');
+            $translated = [];
+        }
+        foreach ($buffer as $key => $item) {
+            $value = TextUtil::decodeNewlines($translated[$key] ?? '');
+            $results[$key] = trim((string)$value) !== '' ? $value : $item['text'];
+        }
     }
 
     /**
@@ -159,11 +222,22 @@ class TranslationService {
         $batches = $this->groupIntoBatches($pending);
         $translations = $this->runBatches($batches);
 
+        // 收集失败项，一次性交给 Google 兜底（而不是每段发一次请求）
+        $failed = [];
+        foreach ($batches as $batch) {
+            foreach ($batch as $key => $item) {
+                if (trim((string)($translations[$key] ?? '')) === '') {
+                    $failed[$key] = $item;
+                }
+            }
+        }
+        $fallbackResults = empty($failed) ? [] : $this->fallbackToGoogleBatch($failed);
+
         foreach ($batches as $batch) {
             foreach ($batch as $key => $item) {
                 $result = $translations[$key] ?? '';
                 if (trim((string)$result) === '') {
-                    $result = $this->fallbackToGoogle($item['text']);
+                    $result = $fallbackResults[$key] ?? $item['text'];
                 }
                 self::$cache[$item['cache']] = $result;
                 TranslationCache::set($item['cache'], $result);
@@ -194,9 +268,17 @@ class TranslationService {
      */
     private function runBatches(array $batches) {
         $translations = [];
+        if ($this->isProviderBroken()) {
+            return $translations;
+        }
+
         if (count($batches) < 2) {
             foreach ($batches as $batch) {
                 $translations += $this->callProviderBatch($this->extractTexts($batch));
+                $this->trackFatalError();
+                if ($this->isProviderBroken()) {
+                    break;
+                }
             }
             return $translations;
         }
@@ -210,7 +292,11 @@ class TranslationService {
                 // 有一批无法用单次请求完成，整体退回串行
                 $translations = [];
                 foreach ($batches as $serialBatch) {
+                    if ($this->isProviderBroken()) {
+                        break;
+                    }
                     $translations += $this->callProviderBatch($this->extractTexts($serialBatch));
+                    $this->trackFatalError();
                 }
                 return $translations;
             }
@@ -222,7 +308,11 @@ class TranslationService {
         if ($responses === null) {
             $translations = [];
             foreach ($batches as $serialBatch) {
+                if ($this->isProviderBroken()) {
+                    break;
+                }
                 $translations += $this->callProviderBatch($this->extractTexts($serialBatch));
+                $this->trackFatalError();
             }
             return $translations;
         }
@@ -231,22 +321,67 @@ class TranslationService {
             . ' | Requests: ' . count($responses));
 
         foreach ($batchTexts as $index => $texts) {
+            if ($this->isProviderBroken()) {
+                break;
+            }
             $response = $responses[$index] ?? null;
             if ($response === null || empty($response['ok'])) {
                 $translations += $this->callProviderBatch($texts);
+                $this->trackFatalError();
                 continue;
             }
             $data = json_decode($response['body'], true);
             if (!is_array($data)) {
                 Logger::error('Parallel batch response is not JSON (HTTP ' . $response['status'] . '), retrying serially');
                 $translations += $this->callProviderBatch($texts);
+                $this->trackFatalError();
                 continue;
             }
             foreach ($this->provider->parseBatchResponseData($data, $texts) as $key => $text) {
                 $translations[$key] = TextUtil::decodeNewlines($text);
             }
+            $this->trackFatalError();
         }
         return $translations;
+    }
+
+    /**
+     * 本次运行内该服务是否已因永久错误熔断
+     */
+    private function isProviderBroken() {
+        $name = $this->provider->getName();
+        if (isset(self::$brokenServices[$name])) {
+            Logger::info('Service ' . strtoupper($name) . ' skipped (broken in this run): ' . self::$brokenServices[$name]);
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * 永久错误（额度耗尽、鉴权失败）发生后登记熔断，后续批次不再请求该服务
+     */
+    private function trackFatalError() {
+        if (!$this->provider->hasFatalError()) {
+            return;
+        }
+        $name = $this->provider->getName();
+        $reason = $this->provider->getLastErrorReason();
+        if (!isset(self::$brokenServices[$name])) {
+            self::$brokenServices[$name] = $reason !== '' ? $reason : 'fatal error';
+            Logger::warning('Service ' . strtoupper($name) . ' disabled for this run: ' . self::$brokenServices[$name]);
+        }
+    }
+
+    /**
+     * 主服务失败原因（用于兜底日志）
+     */
+    private function primaryFailureReason() {
+        $name = strtoupper($this->provider->getName());
+        if (isset(self::$brokenServices[$this->provider->getName()])) {
+            return $name . ' 不可用: ' . self::$brokenServices[$this->provider->getName()];
+        }
+        $reason = $this->provider->getLastErrorReason();
+        return $name . ($reason !== '' ? ' 报错: ' . $reason : ' 未返回译文');
     }
 
     /**

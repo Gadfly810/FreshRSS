@@ -158,7 +158,14 @@ class DeepLProvider extends AbstractProvider {
      * 解析官方批量响应：translations 按 text 数组顺序返回
      */
     public function parseBatchResponseData($data, array $texts) {
-        if (!is_array($data) || empty($data['translations']) || !is_array($data['translations'])) {
+        if (!is_array($data)) {
+            return [];
+        }
+        // 并行路径不经过 requestJson()，业务错误（额度、鉴权）要在这里识别
+        if ($this->isErrorResponse($data)) {
+            return [];
+        }
+        if (empty($data['translations']) || !is_array($data['translations'])) {
             Logger::error($this->getName() . ' native batch response has no translations');
             return [];
         }
@@ -203,12 +210,10 @@ class DeepLProvider extends AbstractProvider {
      */
     protected function isErrorResponse($data) {
         if (isset($data['code']) && (int)$data['code'] !== 200) {
-            Logger::error($this->getName() . ' error code: ' . $data['code'] . ' ' . ($data['message'] ?? ''));
-            return true;
+            return $this->recordError('code ' . $data['code'] . ' ' . ($data['message'] ?? ''));
         }
         if (isset($data['message'])) {
-            Logger::error($this->getName() . ' error: ' . $data['message']);
-            return true;
+            return $this->recordError($data['message']);
         }
         return parent::isErrorResponse($data);
     }

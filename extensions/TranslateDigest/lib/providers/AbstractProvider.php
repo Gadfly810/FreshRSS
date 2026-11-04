@@ -20,6 +20,12 @@ abstract class AbstractProvider implements ITranslationProvider {
     /** 重试间隔（毫秒） */
     protected const RETRY_INTERVAL_MS = 1000;
 
+    /** 最近一次业务错误原因，供调用方判断是否需要熔断与写日志 */
+    protected $lastErrorReason = '';
+
+    /** 是否遇到了短期内不会自愈的错误（额度耗尽、鉴权失败） */
+    protected $fatalError = false;
+
     // Prompt 模板
     protected static $prompts = [
         'translate' => 'You are a professional translation engine. Output ONLY the translated text without explanation.',
@@ -72,8 +78,44 @@ abstract class AbstractProvider implements ITranslationProvider {
             return false;
         }
         $err = $data['error'];
-        Logger::error($this->getName() . ' error: ' . (is_array($err) ? ($err['message'] ?? 'unknown') : (string)$err));
+        if (is_array($err)) {
+            $message = $err['message'] ?? 'unknown';
+            if (!empty($err['type'])) {
+                $message .= ' (' . $err['type'] . ')';
+            }
+        } else {
+            $message = (string)$err;
+        }
+        return $this->recordError($message);
+    }
+
+    /**
+     * 记录业务错误并判断是否属于永久性错误
+     * 额度耗尽、余额不足、鉴权失败这类错误重试或继续请求都不会成功，
+     * 调用方据此在本次运行内熔断，避免对每个批次都打一遍无效请求
+     * @return bool 恒为 true（方便 isErrorResponse 直接返回）
+     */
+    protected function recordError($message) {
+        $this->lastErrorReason = trim((string)$message);
+        if (preg_match('#quota|insufficient|exceeded|unauthor|invalid[ _-]?key|authentication|forbidden|payment|billing|\b401\b|\b402\b|\b403\b|\b456\b#i', $this->lastErrorReason) === 1) {
+            $this->fatalError = true;
+        }
+        Logger::error($this->getName() . ' error: ' . $this->lastErrorReason);
         return true;
+    }
+
+    /**
+     * 最近一次业务错误原因（空串表示没有错误）
+     */
+    public function getLastErrorReason() {
+        return $this->lastErrorReason;
+    }
+
+    /**
+     * 是否遇到了短期内不会自愈的错误
+     */
+    public function hasFatalError() {
+        return $this->fatalError;
     }
 
     /**
@@ -242,6 +284,10 @@ abstract class AbstractProvider implements ITranslationProvider {
      */
     public function parseBatchResponseData($data, array $texts) {
         if (!is_array($data)) {
+            return [];
+        }
+        // 并行路径不经过 requestJson()，业务错误要在这里识别，否则额度/鉴权错误不会触发熔断
+        if ($this->isErrorResponse($data)) {
             return [];
         }
         $parsed = $this->parseBatchResponse($this->extractMessage($data));

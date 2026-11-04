@@ -262,6 +262,17 @@ class GoogleProvider implements ITranslationProvider {
     }
 
     /**
+     * Google 免费接口无需凭据，不存在额度/鉴权之类的永久错误
+     */
+    public function hasFatalError() {
+        return false;
+    }
+
+    public function getLastErrorReason() {
+        return '';
+    }
+
+    /**
      * 构造批量请求
      * 一次 GET 能装下所有文本时才返回请求（否则交给串行路径内部切片）
      * @return array|null
