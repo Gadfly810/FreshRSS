@@ -6,13 +6,10 @@
  *   POST /                                    -> pre-warm the cache, body:
  *                                                {"access_token": "...", "urls": ["...", "..."]}
  *
- * Configuration (set in wrangler.jsonc `vars`, or `wrangler secret put` for the token):
- *   ALLOWED_HOSTS       comma-separated. Exact host, or ".example.com" for a suffix match.
- *                       This list is the ONLY protection on GET, so keep it tight.
+ * Configuration (via `wrangler secret put`):
  *   IMAGE_PROXY_TOKEN   shared secret. Authenticates the POST pre-warm endpoint and HMAC-signs
  *                       every GET: the extension appends &sig=<first 32 hex chars of
- *                       HMAC-SHA256(target, secret)>. Empty disables both, leaving ALLOWED_HOSTS
- *                       as the only guard -- so set it.
+ *                       HMAC-SHA256(target, secret)>. This is the ONLY access control, so set it.
  *
  * Then in the FreshRSS extension settings:
  *   proxy_url   = https://<your-worker-domain>/?url=
@@ -41,28 +38,6 @@ export default {
 		return proxy(target, request, env, ctx);
 	},
 };
-
-// Parsed once per isolate; `vars` are immutable at runtime so this cannot go stale.
-const hostCache = new Map();
-function hostList(env) {
-	const raw = String(env.ALLOWED_HOSTS || '');
-	let list = hostCache.get(raw);
-	if (list === undefined) {
-		list = raw.split(',').map((h) => h.trim().toLowerCase()).filter((h) => h !== '');
-		hostCache.set(raw, list);
-	}
-	return list;
-}
-
-function allowed(target, env) {
-	let host;
-	try {
-		host = new URL(target).hostname.toLowerCase();
-	} catch {
-		return false;
-	}
-	return hostList(env).some((h) => (h.startsWith('.') ? host === h.slice(1) || host.endsWith(h) : host === h));
-}
 
 function cacheKey(request, target) {
 	const u = new URL(request.url);
@@ -127,8 +102,8 @@ function passThrough(res) {
 }
 
 async function proxy(target, request, env, ctx) {
-	if (!/^https?:\/\//i.test(target) || !allowed(target, env)) {
-		return new Response('Forbidden host', { status: 403 });
+	if (!/^https?:\/\//i.test(target)) {
+		return new Response('Target must be an absolute http(s) URL', { status: 400 });
 	}
 	const sig = new URL(request.url).searchParams.get('sig') || '';
 	if (!await signatureOk(target, sig, env)) {
@@ -179,8 +154,8 @@ async function warm(request, env, ctx) {
 	const urls = Array.isArray(body.urls) ? body.urls.slice(0, MAX_WARM_URLS) : [];
 	const cache = caches.default;
 	const results = await Promise.allSettled(urls.map(async (target) => {
-		if (typeof target !== 'string' || !/^https?:\/\//i.test(target) || !allowed(target, env)) {
-			throw new Error('forbidden: ' + target);
+		if (typeof target !== 'string' || !/^https?:\/\//i.test(target)) {
+			throw new Error('not an absolute http(s) URL: ' + target);
 		}
 		const key = cacheKey(request, target);
 		if (await cache.match(key)) {

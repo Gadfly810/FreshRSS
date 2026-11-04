@@ -103,23 +103,24 @@ pnpx wrangler secret put IMAGE_PROXY_TOKEN     # 粘贴一串随机串，同时�
 
 域名之所以不写在 `wrangler.jsonc` 里，是为了让仓库本身不暴露私有端点。代价是**不能用裸的 `wrangler deploy`**：`workers_dev` 关着又没有 routes，裸部署会解绑自定义域名，把 Worker 变成没有入口的孤儿。
 
-两个配置项都在 `wrangler.jsonc` 的 `vars` 里，改完重新 `./deploy.sh` 即可，不用动代码：
+只有一个配置项，用 `secret put` 下发（不进仓库、不进代码）：
 
 | 变量 | 作用 |
 | --- | --- |
-| `ALLOWED_HOSTS` | 逗号分隔。精确域名，或 `.example.com` 表示后缀匹配 |
-| `IMAGE_PROXY_TOKEN` | 共享密钥（用 `secret put`，不要写进 `vars`）。同时用于预热鉴权和 GET 验签 |
+| `IMAGE_PROXY_TOKEN` | 共享密钥。同时用于预热鉴权和 GET 验签 |
+
+Worker 里**没有域名白名单**：任何公网图源都代理。能取什么完全由签名决定 —— 没有密钥就构造不出能通过的 URL，这是唯一的访问控制。
 
 注意：
 
-- `IMAGE_PROXY_TOKEN` 缺失时，预热接口会**拒绝**所有请求（fail closed），而 GET 会**放行**（退化成只有白名单防护）。两边必须配同一个值，只配一边会 403。
+- `IMAGE_PROXY_TOKEN` 缺失时，预热接口会**拒绝**所有请求（fail closed），而 GET 会**放行**。所以两边必须配同一个值，只配一边会 403。
 - GET 验签依赖 URL 里带 `&sig=`，所以插件设置里的「对地址进行编码」要保持开启，否则原图地址里的 `&` 会把参数截断。
 
 ## Worker 部署要点
 
 1. **必须绑自有域名**。`*.workers.dev` 在国内经常连不上，那就白做了。绑域名需要该域名已托管在 Cloudflare，并且 token 有 DNS 编辑权限。
 2. 响应头带 `Cache-Control: public, max-age=604800, immutable`，Cloudflare 边缘会缓存，回源次数 ≈ 图片数而不是访问次数。
-3. `ALLOWED_HOSTS` 别留空 —— GET 接口没有鉴权，白名单是唯一防线，开放的图片代理几天内就会被刷爆。
+3. 签名是唯一的访问控制。密钥泄露 = 代理变成开放代理，所以不要把它写进任何会进仓库的文件。
 4. 建议在 Zone 里加一条 Cache Rule：`URI Path starts with /` 时 `Edge Cache TTL = 1 month`，把边缘命中率拉满。
 
 ## 已知限制
