@@ -13,6 +13,58 @@ final class httpUtilTest extends \PHPUnit\Framework\TestCase {
 		self::assertEquals($expected, FreshRSS_http_Util::compareUrlIgnoringHttps($url1, $url2) === 0);
 	}
 
+	#[DataProvider('provideCurlProxyValues')]
+	public function test_sanitizeCurlParamsRejectsMalformedProxy(string $proxy, bool $shouldSurvive): void {
+		$sanitized = FreshRSS_http_Util::sanitizeCurlParams([CURLOPT_PROXY => $proxy, CURLOPT_PROXYTYPE => CURLPROXY_HTTP]);
+		if ($shouldSurvive) {
+			self::assertSame($proxy, $sanitized[CURLOPT_PROXY] ?? null);
+		} else {
+			self::assertArrayNotHasKey(CURLOPT_PROXY, $sanitized);
+		}
+	}
+
+	/** @return array<string,array{string,bool}> */
+	public static function provideCurlProxyValues(): array {
+		return [
+			// A second `://` would otherwise be reduced by a greedy scheme-strip to this
+			// trailing "decoy" host for the allowlist/DNS-pinning check, while cURL still
+			// received the original, unstripped value as CURLOPT_PROXY.
+			'rejects scheme-prefixed decoy host' => ['http://127.0.0.1:8080/://8.8.8.8', false],
+			'rejects scheme-less decoy host' => ['127.0.0.1:8080/://198.51.100.10', false],
+			// The scheme comes from CURLOPT_PROXYTYPE, not the value itself -- a scheme-containing
+			// value is rejected outright rather than normalised.
+			'rejects a value carrying its own scheme' => ['http://proxy.example.com:3128', false],
+			// cURL treats "host:port/path" as a Unix domain socket for SOCKS proxies and ignores the
+			// port, so an allowlisted host:port could otherwise be smuggled into connecting to an
+			// arbitrary local socket.
+			'rejects a SOCKS Unix-domain-socket path' => ['localhost:9050/path/to.sock', false],
+			'accepts bare host:port' => ['127.0.0.1:8080', true],
+			'accepts hostname:port' => ['proxy.example.com:3128', true],
+			'accepts host:port with credentials' => ['user:pass@203.0.113.5:1080', true],
+			'accepts an IPv6 proxy' => ['[::1]:8080', true],
+		];
+	}
+
+	#[DataProvider('provideUrlsForCheckUrl')]
+	public function test_checkUrl(string $url, string|false $expected): void {
+		self::assertSame($expected, FreshRSS_http_Util::checkUrl($url));
+	}
+
+	/** @return Traversable<string,array{string,string|false}> */
+	public static function provideUrlsForCheckUrl(): Traversable {
+		yield 'plain' => ['https://example.net/feed?a=1&amp;b=2', 'https://example.net/feed?a=1&amp;b=2'];
+		yield 'underscore' => ['https://ex_ample.net/', 'https://ex_ample.net/'];
+		yield 'IPv6' => ['https://[2001:db8::1]/feed', 'https://[2001:db8::1]/feed'];
+		if (function_exists('idn_to_ascii')) {
+			yield 'IDN' => ['https://bücher.example/feed', 'https://xn--bcher-kva.example/feed'];
+			yield 'IDN with ideographic full stop' => ['https://日本語。example/', 'https://xn--wgv71a119e.example/'];
+		}
+		// IDNA (UTS #46) maps fullwidth punctuation to ASCII: must not produce characters absent from the (possibly HTML-encoded) input
+		yield 'fullwidth markup in host' => ['https://example.net／＂＞＜b＞', false];
+		yield 'fullwidth path and query in host' => ['https://example.net／path？a＝1＆b＝2', false];
+		yield 'fullwidth userinfo in host' => ['https://example.net＠example.org/', false];
+	}
+
 	#[\Override]
 	protected function tearDown(): void {
 		FreshRSS_Context::initSystem(reload: true);	// Restore the default internal host allowlist

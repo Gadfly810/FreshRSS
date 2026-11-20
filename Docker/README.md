@@ -213,6 +213,10 @@ docker run -d --restart unless-stopped --log-opt max-size=10m \
   --name freshrss-db postgres
 ```
 
+> ⚠️ `postgres` without a version tag is `postgres:latest`, which moves to each new major version of PostgreSQL.
+> New major versions of PostgreSQL refuse to start with the data of a different PostgreSQL version:
+> see update guidance on [docker-library/postgres#37](https://github.com/docker-library/postgres/issues/37) or with FreshRSS own [database migration](#migrate-database).
+
 In the FreshRSS setup, you will then specify the name of the container (`freshrss-db`) as the host for the database.
 
 See also the section [Docker Compose with PostgreSQL](#docker-compose-with-postgresql) below.
@@ -642,7 +646,7 @@ Remember not pass the `CRON_MIN` environment variable to your Docker run, to avo
 Example on Debian / Ubuntu: Create `/etc/cron.d/FreshRSS` with:
 
 ```text
-7,37 * * * * root docker exec --user www-data freshrss php ./app/actualize_script.php > /tmp/FreshRSS.log 2>&1
+7,37 * * * * root docker exec --user www-data freshrss php ./app/actualize_script.php >> /tmp/FreshRSS.log 2>&1
 ```
 
 ### Option 3) Cron as another instance of the same FreshRSS Docker image

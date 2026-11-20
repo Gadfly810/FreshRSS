@@ -94,4 +94,27 @@ final class EntryTest extends \PHPUnit\Framework\TestCase {
 		self::assertStringContainsString('src="https://example.com/thumb.jpg"', $html);
 		self::assertStringContainsString('Hello', $html);
 	}
+
+	/** ZIP/JSON export/import */
+	public function test_toGReaderFreshRssExportRoundTripsEncoding(): void {
+		$feed = new FreshRSS_Feed('http://example.net/feed.xml', validate: false);
+		$feed->_id(1);
+		$feed->_name('Feed &amp; me');
+
+		$entry = new FreshRSS_Entry(1, 'tag:example.net,2026:1', 'A &amp; B', 'B &amp; C', 'Hello', 'https://example.net/post-1', 1731312000);
+		$entry->_id('1731312000000000');
+		$entry->_feed($feed);
+
+		$item = $entry->toGReader('freshrss');
+		self::assertSame('A &amp; B', $item['title']);
+		self::assertSame('B &amp; C', $item['author']);
+	}
+
+	/** Above PHP_INT_MAX, an integer literal is a float on 32-bit platforms, so an entry ID is only ever a string */
+	public function test_idRejectsAFloat(): void {
+		$entry = new FreshRSS_Entry(1, 'guid-1', 'Title', '', '', 'https://example.net/1', 1700000000);
+		$this->expectException(\TypeError::class);
+		// @phpstan-ignore argument.type
+		$entry->_id(1700000000000001.0);
+	}
 }
